@@ -1,10 +1,10 @@
-// LINE WORKS API用アクセストークンを取得するファイル
+// LINE WORKS API連携を管理するファイル
 
+// LINE WORKS Bot API用のアクセストークンを取得する。
 function getAccessToken(properties) {
     const clientId = properties.getProperty("CLIENT_ID");
     const clientSecret = properties.getProperty("CLIENT_SECRET");
     const serviceAcct = properties.getProperty("SERVICE_ACCT");
-
     let rawKey = properties.getProperty("PRIVATE_KEY");
 
     if (!clientId) {
@@ -37,12 +37,10 @@ ${cleanedKey}
 -----END PRIVATE KEY-----`;
 
     const now = Math.floor(Date.now() / 1000);
-
     const header = {
         alg: "RS256",
         typ: "JWT",
     };
-
     const payload = {
         iss: clientId,
         sub: serviceAcct,
@@ -52,15 +50,10 @@ ${cleanedKey}
     };
 
     const encodedHeader = Utilities.base64EncodeWebSafe(JSON.stringify(header)).replace(/=+$/, "");
-
     const encodedPayload = Utilities.base64EncodeWebSafe(JSON.stringify(payload)).replace(/=+$/, "");
-
     const signatureInput = `${encodedHeader}.${encodedPayload}`;
-
     const signature = Utilities.computeRsaSha256Signature(signatureInput, privateKey);
-
     const encodedSignature = Utilities.base64EncodeWebSafe(signature).replace(/=+$/, "");
-
     const jwt = `${signatureInput}.${encodedSignature}`;
 
     const response = UrlFetchApp.fetch(LINEWORKS_TOKEN_URL, {
@@ -84,4 +77,40 @@ ${cleanedKey}
     }
 
     return json.access_token;
+}
+
+// LINE WORKSの指定チャンネルへテキストメッセージを送信する。
+function sendLineWorksMessage(accessToken, properties, roomId, text) {
+    const botId = properties.getProperty("BOT_ID");
+
+    if (!botId) {
+        throw new Error(ERROR_MESSAGES.botIdMissing);
+    }
+
+    if (!roomId) {
+        throw new Error(ERROR_MESSAGES.roomIdMissing);
+    }
+
+    const url = `https://www.worksapis.com/v1.0/bots/${botId}/channels/${roomId}/messages`;
+    const response = UrlFetchApp.fetch(url, {
+        method: "post",
+        headers: {
+            Authorization: "Bearer " + accessToken,
+            "Content-Type": "application/json",
+        },
+        payload: JSON.stringify({
+            content: {
+                type: "text",
+                text,
+            },
+        }),
+        muteHttpExceptions: true,
+    });
+
+    const code = response.getResponseCode();
+    const body = response.getContentText();
+
+    if (code < 200 || code >= 300) {
+        throw createHttpError(ERROR_MESSAGES.lineWorksSendFailed, code, body);
+    }
 }
