@@ -9,6 +9,8 @@ final class EarthquakeChecker
     private StateStore $stateStore;
     private FormStockStore $formStockStore;
     private Logger $logger;
+    private bool $lowStockNotifiedThisRun = false;
+    private bool $stockOutNotifiedThisRun = false;
 
     /** @var array<int, string> */
     private array $scaleNames = [
@@ -60,12 +62,14 @@ final class EarthquakeChecker
             return $timeA <=> $timeB;
         });
 
+        $usedFormCount = 0;
+
         foreach ($targets as $target) {
             $form = $this->formStockStore->takeAvailable();
 
             if ($form === null) {
                 $this->logger->error('Skipped earthquake notification because no form URL is available.', $this->logContext($target));
-                $this->notifyLowStockIfNeeded();
+                $this->notifyStockOutIfNeeded();
                 continue;
             }
 
@@ -100,11 +104,11 @@ final class EarthquakeChecker
                 throw $e;
             }
 
-            $this->notifyLowStockIfNeeded();
+            $usedFormCount++;
         }
 
-        if ($targets === []) {
-            $this->notifyLowStockIfNeeded();
+        if ($usedFormCount > 0) {
+            $this->notifyLowStockAfterConsumption();
         }
     }
 
@@ -137,41 +141,43 @@ final class EarthquakeChecker
             'invalid_rows' => $result['invalid_rows'],
         ]);
 
-        $this->refreshLowStockFlag();
     }
 
-    private function refreshLowStockFlag(): void
-    {
-        if ($this->formStockStore->availableCount() >= $this->config->formLowStockThreshold()
-            && $this->formStockStore->lowStockNotified()) {
-            $this->formStockStore->setLowStockNotified(false);
-            $this->formStockStore->save();
-        }
-    }
-
-    private function notifyLowStockIfNeeded(): void
+    private function notifyLowStockAfterConsumption(): void
     {
         $availableCount = $this->formStockStore->availableCount();
+        $threshold = $this->config->formLowStockThreshold();
 
-        if ($availableCount >= $this->config->formLowStockThreshold()) {
-            if ($this->formStockStore->lowStockNotified()) {
-                $this->formStockStore->setLowStockNotified(false);
-                $this->formStockStore->save();
-            }
-            return;
-        }
-
-        if ($this->formStockStore->lowStockNotified()) {
+        if ($availableCount > $threshold || $this->lowStockNotifiedThisRun || $this->stockOutNotifiedThisRun) {
             return;
         }
 
         try {
-            $this->notifyMaintenance('安否確認フォームURLの残数が少なくなっています。フォームURLを補充してください。');
-            $this->formStockStore->setLowStockNotified(true);
-            $this->formStockStore->save();
+            $this->notifyMaintenance(
+                '安否確認フォームURLの残数が少なくなっています。残り未使用フォームURL数: ' . $availableCount . '件。フォームURLを補充してください。'
+            );
+            $this->lowStockNotifiedThisRun = true;
         } catch (Throwable $e) {
             $this->logger->error('Form low stock notification failed.', [
                 'available_count' => $availableCount,
+                'threshold' => $threshold,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function notifyStockOutIfNeeded(): void
+    {
+        if ($this->stockOutNotifiedThisRun) {
+            return;
+        }
+
+        $this->stockOutNotifiedThisRun = true;
+
+        try {
+            $this->notifyMaintenance('安否確認フォームURLが枯渇しています。地震通知を送信できませんでした。フォームURLを至急補充してください。');
+        } catch (Throwable $e) {
+            $this->logger->error('Form stock out notification failed.', [
                 'error' => $e->getMessage(),
             ]);
         }
