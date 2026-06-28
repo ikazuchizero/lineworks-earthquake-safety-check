@@ -5,6 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/../src/Config.php';
 require_once __DIR__ . '/../src/Logger.php';
 require_once __DIR__ . '/../src/StateStore.php';
+require_once __DIR__ . '/../src/FormStockStore.php';
 require_once __DIR__ . '/../src/P2PQuakeClient.php';
 require_once __DIR__ . '/../src/LineWorksClient.php';
 require_once __DIR__ . '/../src/EarthquakeChecker.php';
@@ -42,11 +43,18 @@ try {
     $stateStore = new StateStore($storageDir . '/state.json');
     $p2pQuakeClient = new P2PQuakeClient($config->p2pquakeApiUrl(), 10);
     $lineWorksClient = new LineWorksClient($config);
+    $formStockStore = new FormStockStore(
+        $config->formStockPath(),
+        $config->formImportCsvPath(),
+        $config->formImportProcessedDir(),
+        $config->formImportFailedDir()
+    );
     $checker = new EarthquakeChecker(
         $config,
         $p2pQuakeClient,
         $lineWorksClient,
         $stateStore,
+        $formStockStore,
         $logger
     );
 

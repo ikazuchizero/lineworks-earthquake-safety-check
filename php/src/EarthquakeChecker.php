@@ -7,6 +7,7 @@ final class EarthquakeChecker
     private P2PQuakeClient $p2pQuakeClient;
     private LineWorksClient $lineWorksClient;
     private StateStore $stateStore;
+    private FormStockStore $formStockStore;
     private Logger $logger;
 
     /** @var array<int, string> */
@@ -27,17 +28,21 @@ final class EarthquakeChecker
         P2PQuakeClient $p2pQuakeClient,
         LineWorksClient $lineWorksClient,
         StateStore $stateStore,
+        FormStockStore $formStockStore,
         Logger $logger
     ) {
         $this->config = $config;
         $this->p2pQuakeClient = $p2pQuakeClient;
         $this->lineWorksClient = $lineWorksClient;
         $this->stateStore = $stateStore;
+        $this->formStockStore = $formStockStore;
         $this->logger = $logger;
     }
 
     public function run(): void
     {
+        $this->importForms();
+
         $events = $this->p2pQuakeClient->fetchEarthquakes();
         $this->logger->info('Fetched earthquake events.', ['count' => count($events)]);
 
@@ -56,8 +61,16 @@ final class EarthquakeChecker
         });
 
         foreach ($targets as $target) {
+            $form = $this->formStockStore->takeAvailable();
+
+            if ($form === null) {
+                $this->logger->error('Skipped earthquake notification because no form URL is available.', $this->logContext($target));
+                $this->notifyLowStockIfNeeded();
+                continue;
+            }
+
             try {
-                $this->lineWorksClient->sendMessage($this->createMessage($target));
+                $this->lineWorksClient->sendMessage($this->createMessage($target, $form['url']));
             } catch (Throwable $e) {
                 $this->logger->error('LINE WORKS send failed.', $this->logContext($target, [
                     'error' => $e->getMessage(),
@@ -68,6 +81,9 @@ final class EarthquakeChecker
             $this->logger->info('LINE WORKS send succeeded.', $this->logContext($target));
 
             try {
+                $this->formStockStore->markUsed($form['index'], $target['dedupe_key']);
+                $this->formStockStore->save();
+
                 $this->stateStore->markNotified($target['dedupe_key'], [
                     'dedupe_key' => $target['dedupe_key'],
                     'event_id' => $target['event_id'],
@@ -78,12 +94,92 @@ final class EarthquakeChecker
                 ]);
                 $this->stateStore->save();
             } catch (Throwable $e) {
-                $this->logger->error('State save failed after LINE WORKS send succeeded.', $this->logContext($target, [
+                $this->logger->error('State or form save failed after LINE WORKS send succeeded.', $this->logContext($target, [
                     'error' => $e->getMessage(),
                 ]));
                 throw $e;
             }
+
+            $this->notifyLowStockIfNeeded();
         }
+
+        if ($targets === []) {
+            $this->notifyLowStockIfNeeded();
+        }
+    }
+
+    private function importForms(): void
+    {
+        try {
+            $result = $this->formStockStore->importCsvIfExists();
+        } catch (FormImportException $e) {
+            $this->logger->error('Form CSV import failed.', [
+                'error' => $e->getMessage(),
+            ]);
+
+            try {
+                $this->notifyMaintenance('フォームURL CSVの取り込みに失敗しました。CSVのヘッダーと内容を確認してください。');
+            } catch (Throwable $notifyError) {
+                $this->logger->error('Form CSV failure notification failed.', [
+                    'error' => $notifyError->getMessage(),
+                ]);
+            }
+            return;
+        }
+
+        if (!$result['processed']) {
+            return;
+        }
+
+        $this->logger->info('Form CSV import succeeded.', [
+            'imported' => $result['imported'],
+            'duplicate_skipped' => $result['duplicate_skipped'],
+            'invalid_rows' => $result['invalid_rows'],
+        ]);
+
+        $this->refreshLowStockFlag();
+    }
+
+    private function refreshLowStockFlag(): void
+    {
+        if ($this->formStockStore->availableCount() >= $this->config->formLowStockThreshold()
+            && $this->formStockStore->lowStockNotified()) {
+            $this->formStockStore->setLowStockNotified(false);
+            $this->formStockStore->save();
+        }
+    }
+
+    private function notifyLowStockIfNeeded(): void
+    {
+        $availableCount = $this->formStockStore->availableCount();
+
+        if ($availableCount >= $this->config->formLowStockThreshold()) {
+            if ($this->formStockStore->lowStockNotified()) {
+                $this->formStockStore->setLowStockNotified(false);
+                $this->formStockStore->save();
+            }
+            return;
+        }
+
+        if ($this->formStockStore->lowStockNotified()) {
+            return;
+        }
+
+        try {
+            $this->notifyMaintenance('安否確認フォームURLの残数が少なくなっています。フォームURLを補充してください。');
+            $this->formStockStore->setLowStockNotified(true);
+            $this->formStockStore->save();
+        } catch (Throwable $e) {
+            $this->logger->error('Form low stock notification failed.', [
+                'available_count' => $availableCount,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function notifyMaintenance(string $message): void
+    {
+        $this->lineWorksClient->sendMessage($message, $this->config->formLowStockRoomId());
     }
 
     /**
@@ -92,8 +188,8 @@ final class EarthquakeChecker
      */
     private function selectNotificationTargets(array $events): array
     {
-        $targets = [];
-        $seenDedupeKeys = [];
+        $candidates = [];
+        $hasNamedHypocenterByTime = [];
 
         foreach ($events as $event) {
             if (!is_array($event)) {
@@ -119,6 +215,25 @@ final class EarthquakeChecker
             if ($this->stateStore->has($candidate['dedupe_key'])) {
                 $this->logger->info('Skipped earthquake event.', $this->logContext($candidate, [
                     'reason' => 'duplicate_dedupe_key',
+                ]));
+                continue;
+            }
+
+            $candidates[] = $candidate;
+
+            if ($candidate['hypocenter_name'] !== 'UNKNOWN') {
+                $hasNamedHypocenterByTime[(string) $candidate['earthquake_time']] = true;
+            }
+        }
+
+        $targets = [];
+        $seenDedupeKeys = [];
+
+        foreach ($candidates as $candidate) {
+            if ($candidate['hypocenter_name'] === 'UNKNOWN'
+                && isset($hasNamedHypocenterByTime[(string) $candidate['earthquake_time']])) {
+                $this->logger->info('Skipped earthquake event.', $this->logContext($candidate, [
+                    'reason' => 'unknown_hypocenter_has_named_candidate_in_current_batch',
                 ]));
                 continue;
             }
@@ -189,12 +304,11 @@ final class EarthquakeChecker
     }
 
     /** @param array<string, mixed> $target */
-    private function createMessage(array $target): string
+    private function createMessage(array $target, string $formUrl): string
     {
         $formattedTime = $this->formatEarthquakeTime((string) $target['earthquake_time']);
         $hypocenterName = (string) $target['hypocenter_name'];
         $scaleText = $this->scaleText((int) $target['max_scale']);
-        $formUrl = $this->config->formUrl();
 
         return <<<TEXT
 お疲れ様です。
@@ -217,8 +331,14 @@ TEXT;
     private function formatEarthquakeTime(string $value): string
     {
         try {
-            $time = new DateTimeImmutable($value);
-            return $time->setTimezone(new DateTimeZone('Asia/Tokyo'))->format('Y/m/d H:i:s');
+            $displayTimeZone = new DateTimeZone('Asia/Tokyo');
+            $hasTimeZone = preg_match('/(?:Z|[+-]\d{2}:?\d{2})$/', $value) === 1;
+
+            $time = $hasTimeZone
+                ? new DateTimeImmutable($value)
+                : new DateTimeImmutable($value, $displayTimeZone);
+
+            return $time->setTimezone($displayTimeZone)->format('Y/m/d H:i:s');
         } catch (Exception $e) {
             return $value;
         }

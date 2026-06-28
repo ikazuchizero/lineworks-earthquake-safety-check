@@ -72,7 +72,7 @@ final class Config
 
     public function formUrl(): string
     {
-        return (string) $this->values['form_url'];
+        return (string) ($this->values['form_url'] ?? '');
     }
 
     public function privateKeyPath(): string
@@ -80,9 +80,40 @@ final class Config
         return (string) $this->values['private_key_path'];
     }
 
+    public function formStockPath(): string
+    {
+        return (string) $this->values['form_stock_path'];
+    }
+
+    public function formImportCsvPath(): string
+    {
+        return (string) $this->values['form_import_csv_path'];
+    }
+
+    public function formImportProcessedDir(): string
+    {
+        return (string) $this->values['form_import_processed_dir'];
+    }
+
+    public function formImportFailedDir(): string
+    {
+        return (string) $this->values['form_import_failed_dir'];
+    }
+
+    public function formLowStockThreshold(): int
+    {
+        return (int) $this->values['form_low_stock_threshold'];
+    }
+
+    public function formLowStockRoomId(): string
+    {
+        return (string) $this->values['form_low_stock_room_id'];
+    }
+
     private function validate(): void
     {
         $this->requireNumeric('notify_scale');
+        $this->requireNumeric('form_low_stock_threshold');
 
         foreach ([
             'client_id',
@@ -90,10 +121,18 @@ final class Config
             'service_account',
             'bot_id',
             'room_id',
-            'form_url',
             'private_key_path',
+            'form_stock_path',
+            'form_import_csv_path',
+            'form_import_processed_dir',
+            'form_import_failed_dir',
+            'form_low_stock_room_id',
         ] as $key) {
             $this->requireNonEmptyString($key);
+        }
+
+        if ($this->formLowStockThreshold() < 1) {
+            throw new RuntimeException('Config value must be greater than 0: form_low_stock_threshold');
         }
 
         if (!is_readable($this->privateKeyPath())) {

@@ -14,8 +14,14 @@ return [
     'service_account' => '',
     'bot_id' => '',
     'room_id' => '',
-    'form_url' => '',
 
     // Store the real private key outside Git.
     'private_key_path' => __DIR__ . '/secrets/private.key',
+
+    'form_stock_path' => __DIR__ . '/storage/forms.json',
+    'form_import_csv_path' => __DIR__ . '/storage/import/forms.csv',
+    'form_import_processed_dir' => __DIR__ . '/storage/import/processed',
+    'form_import_failed_dir' => __DIR__ . '/storage/import/failed',
+    'form_low_stock_threshold' => 10,
+    'form_low_stock_room_id' => '',
 ];

@@ -10,12 +10,12 @@ final class LineWorksClient
         $this->config = $config;
     }
 
-    public function sendMessage(string $text): void
+    public function sendMessage(string $text, ?string $roomId = null): void
     {
         $accessToken = $this->getAccessToken();
         $botId = rawurlencode($this->config->botId());
-        $roomId = rawurlencode($this->config->roomId());
-        $url = 'https://www.worksapis.com/v1.0/bots/' . $botId . '/channels/' . $roomId . '/messages';
+        $targetRoomId = rawurlencode($roomId ?? $this->config->roomId());
+        $url = 'https://www.worksapis.com/v1.0/bots/' . $botId . '/channels/' . $targetRoomId . '/messages';
 
         $payload = json_encode([
             'content' => [
