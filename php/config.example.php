@@ -58,5 +58,5 @@ return [
     // フォーム補充・枯渇通知を送るメンテナンス用チャットルーム。
     // 安否確認通知先の room_id とは別にすること。
     // Botがこのroomにも参加していないと、在庫不足に気づけない。
-    'form_low_stock_room_id' => '',
+    'form_low_stock_room_id' => 'REPLACE_WITH_FORM_LOW_STOCK_ROOM_ID',
 ];
