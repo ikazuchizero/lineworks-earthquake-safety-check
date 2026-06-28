@@ -1,4 +1,12 @@
 {
-  "forms": [],
+  "forms": [
+    {
+      "url": "https://example.com/form/001",
+      "status": "available",
+      "imported_at": "2026-06-28T19:00:00+09:00",
+      "used_at": null,
+      "dedupe_key": null
+    }
+  ],
   "low_stock_notified": false
 }

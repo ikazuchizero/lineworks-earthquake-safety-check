@@ -9,7 +9,13 @@ final class EarthquakeChecker
     private StateStore $stateStore;
     private FormStockStore $formStockStore;
     private Logger $logger;
+    // Low-stock alerts are intentionally scoped to one check.php execution.
+    // We do not persist this flag: if a future earthquake consumes another form,
+    // operations should be reminded again instead of missing the only warning.
     private bool $lowStockNotifiedThisRun = false;
+
+    // Stock-out alerts are also capped per execution so multiple target earthquakes
+    // do not spam the maintenance room after the form pool is already empty.
     private bool $stockOutNotifiedThisRun = false;
 
     /** @var array<int, string> */
@@ -45,9 +51,16 @@ final class EarthquakeChecker
     {
         $this->importForms();
 
+        // P2PQuake is fetched with limit=10 by php/bin/check.php. Do not reduce it
+        // to limit=1: a non-target event, such as seismic intensity 1 information,
+        // can arrive immediately after a stronger earthquake and hide the event that
+        // actually needs a safety-confirmation notification.
         $events = $this->p2pQuakeClient->fetchEarthquakes();
         $this->logger->info('Fetched earthquake events.', ['count' => count($events)]);
 
+        // notify_scale is the minimum JMA intensity code to notify. A value of 0 is
+        // useful for test rooms, but production should normally be restored to 45
+        // or higher, corresponding to seismic intensity 5-lower or above.
         $targets = $this->selectNotificationTargets($events);
         $this->logger->info('Selected notification targets.', ['count' => count($targets)]);
 
@@ -62,18 +75,26 @@ final class EarthquakeChecker
             return $timeA <=> $timeB;
         });
 
+        // Low-stock checks are delayed until all earthquake notifications finish.
+        // This keeps a multi-earthquake run from sending maintenance alerts midway
+        // through user-facing safety notifications.
         $usedFormCount = 0;
 
         foreach ($targets as $target) {
             $form = $this->formStockStore->takeAvailable();
 
             if ($form === null) {
+                // No fallback fixed URL is allowed here. Reusing one form URL for
+                // multiple earthquakes would mix responses and break safety checks,
+                // so we skip the user-facing notification and alert maintainers.
                 $this->logger->error('Skipped earthquake notification because no form URL is available.', $this->logContext($target));
                 $this->notifyStockOutIfNeeded();
                 continue;
             }
 
             try {
+                // The form URL is still available at this point. If LINE WORKS send
+                // fails, do not mark the form used and do not save notification state.
                 $this->lineWorksClient->sendMessage($this->createMessage($target, $form['url']));
             } catch (Throwable $e) {
                 $this->logger->error('LINE WORKS send failed.', $this->logContext($target, [
@@ -85,9 +106,15 @@ final class EarthquakeChecker
             $this->logger->info('LINE WORKS send succeeded.', $this->logContext($target));
 
             try {
+                // Commit side effects only after LINE WORKS accepts the message.
+                // Saving these before send would cause missed notifications; a send
+                // failure would look already handled and the form could be lost.
                 $this->formStockStore->markUsed($form['index'], $target['dedupe_key']);
                 $this->formStockStore->save();
 
+                // State is also saved after send success. If this save fails, the
+                // next run may notify again, but that is safer than silently missing
+                // a real safety-confirmation request.
                 $this->stateStore->markNotified($target['dedupe_key'], [
                     'dedupe_key' => $target['dedupe_key'],
                     'event_id' => $target['event_id'],
@@ -145,9 +172,16 @@ final class EarthquakeChecker
 
     private function notifyLowStockAfterConsumption(): void
     {
+        // Low-stock notifications are not sent on every cron execution. They are
+        // sent only after at least one form was consumed in this run, and at most
+        // once per run. If low stock continues, the next earthquake notification may
+        // remind maintainers again, which reduces the risk of one missed alert.
         $availableCount = $this->formStockStore->availableCount();
         $threshold = $this->config->formLowStockThreshold();
 
+        // The threshold is inclusive: threshold=10 means 10 or fewer available forms
+        // should trigger a refill reminder. If stock-out was already reported in this
+        // run, do not also send a low-stock reminder.
         if ($availableCount > $threshold || $this->lowStockNotifiedThisRun || $this->stockOutNotifiedThisRun) {
             return;
         }
@@ -168,6 +202,9 @@ final class EarthquakeChecker
 
     private function notifyStockOutIfNeeded(): void
     {
+        // Stock-out is more urgent than low stock. The earthquake notification is not
+        // sent because no unique form URL can be attached, and this execution should
+        // not stack an additional low-stock alert on top of the stock-out alert.
         if ($this->stockOutNotifiedThisRun) {
             return;
         }
@@ -194,6 +231,11 @@ final class EarthquakeChecker
      */
     private function selectNotificationTargets(array $events): array
     {
+        // Dedupe policy: event.id alone is not stable enough for earthquake identity.
+        // P2PQuake/JMA can publish intensity reports, hypocenter reports, and follow-ups
+        // for the same earthquake with different ids. Use earthquake.time + hypocenter
+        // name instead. Do not include maxScale: follow-up reports may update intensity,
+        // but that should not create a second safety-confirmation notification.
         $candidates = [];
         $hasNamedHypocenterByTime = [];
 
@@ -238,6 +280,10 @@ final class EarthquakeChecker
         foreach ($candidates as $candidate) {
             if ($candidate['hypocenter_name'] === 'UNKNOWN'
                 && isset($hasNamedHypocenterByTime[(string) $candidate['earthquake_time']])) {
+                // Some reports first lack a hypocenter and later include one. When a
+                // named hypocenter exists in the same fetched batch, prefer that named
+                // candidate and drop UNKNOWN to avoid duplicate notifications for the
+                // same occurrence time. If UNKNOWN is the only candidate, it remains valid.
                 $this->logger->info('Skipped earthquake event.', $this->logContext($candidate, [
                     'reason' => 'unknown_hypocenter_has_named_candidate_in_current_batch',
                 ]));
@@ -297,6 +343,10 @@ final class EarthquakeChecker
         }
 
         $maxScale = (int) ($earthquake['maxScale'] ?? 0);
+
+        // Keep maxScale out of the dedupe key. If a follow-up raises the maximum
+        // intensity for the same earthquake, including maxScale would make a second
+        // key and send a duplicate safety-confirmation message.
         $dedupeKey = $earthquakeTime . '|' . $hypocenterName;
 
         return [
@@ -336,6 +386,9 @@ TEXT;
 
     private function formatEarthquakeTime(string $value): string
     {
+        // P2PQuake/JMA earthquake.time without an explicit timezone is already a
+        // Japan-time wall-clock value. Treating it as UTC and converting to Tokyo
+        // would shift displayed occurrence time by +9 hours.
         try {
             $displayTimeZone = new DateTimeZone('Asia/Tokyo');
             $hasTimeZone = preg_match('/(?:Z|[+-]\d{2}:?\d{2})$/', $value) === 1;
