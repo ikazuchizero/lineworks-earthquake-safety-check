@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 final class EarthquakeChecker
 {
+    // 地震取得、通知対象抽出、フォームURL解決、LINE WORKS送信、state保存をつなぐ中核クラス。
+    // 事故防止のため「送信成功前にstateやフォームを確定しない」順序をここで守る。
     private Config $config;
     private P2PQuakeClient $p2pQuakeClient;
     private LineWorksClient $lineWorksClient;
@@ -49,6 +51,8 @@ final class EarthquakeChecker
 
     public function run(): void
     {
+        // 全体フローの入口。
+        // 1. 必要ならCSV取り込み 2. 地震取得 3. 通知対象抽出 4. 送信 5. state/form更新 の順で進める。
         if ($this->config->formStockEnabled()) {
             $this->importForms();
         }
@@ -165,6 +169,8 @@ final class EarthquakeChecker
 
     private function importForms(): void
     {
+        // form_stock_enabled=true のときだけ呼ばれる。
+        // CSVに実フォームURLが入っていても、ログにはURL本文を出さず件数だけ残す。
         try {
             $result = $this->formStockStore->importCsvIfExists();
         } catch (FormImportException $e) {
@@ -245,6 +251,8 @@ final class EarthquakeChecker
 
     private function notifyMaintenance(string $message): void
     {
+        // 補充・枯渇など運用担当者向け通知は、安否確認通知先とは別roomへ送る。
+        // 利用者向けルームに運用アラートを混ぜないため。
         $this->lineWorksClient->sendMessage($message, $this->config->formLowStockRoomId());
     }
 
@@ -331,6 +339,8 @@ final class EarthquakeChecker
      */
     private function buildCandidate(array $event): ?array
     {
+        // P2PQuakeのレスポンスは外部API由来なので、必須要素が欠ける可能性がある。
+        // 欠けたイベントはskip理由を残し、無理に通知対象へしない。
         $eventId = (string) ($event['id'] ?? '');
         $earthquake = $event['earthquake'] ?? null;
 
@@ -382,6 +392,8 @@ final class EarthquakeChecker
     /** @param array<string, mixed> $target */
     private function createMessage(array $target, string $formUrl): string
     {
+        // 安否確認メッセージ本文を作る。
+        // formUrlは実フォームURLなので、ここでログ出力せずLINE WORKS本文にだけ入れる。
         $formattedTime = $this->formatEarthquakeTime((string) $target['earthquake_time']);
         $hypocenterName = (string) $target['hypocenter_name'];
         $scaleText = $this->scaleText((int) $target['max_scale']);

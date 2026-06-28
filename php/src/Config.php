@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 final class Config
 {
+    // config.example.php は公開できるテンプレート、config.php はGit管理外の実設定。
+    // ここでは実値を表示せず、空値・型・本番/テスト切り替え条件だけを検証する。
     /** @var array<string, mixed> */
     private array $values;
 
@@ -14,6 +16,8 @@ final class Config
 
     public static function load(string $path): self
     {
+        // 実 config.php は秘密値を含むため、このメソッドでも中身は出力しない。
+        // エラーは「どの設定が足りないか」までに留め、値そのものは表示しない。
         if (!is_file($path)) {
             throw new RuntimeException('Config file not found: ' . $path);
         }
@@ -77,6 +81,8 @@ final class Config
 
     public function formStockEnabled(): bool
     {
+        // 未設定時は true 扱いにする。
+        // 既存の実 config.php に新項目がなくても、従来のフォームストック運用を壊さないため。
         if (!array_key_exists('form_stock_enabled', $this->values)) {
             return true;
         }
@@ -121,6 +127,8 @@ final class Config
 
     private function validate(): void
     {
+        // 起動時に設定不備を止める。
+        // 送信途中で不足に気づくと、通知漏れやフォーム消費だけが起きる事故につながる。
         $this->requireNumeric('notify_scale');
         $this->requireBooleanIfPresent('form_stock_enabled');
 
@@ -136,6 +144,8 @@ final class Config
         }
 
         if ($this->formStockEnabled()) {
+            // 本番推奨のフォームストック運用。
+            // 在庫ファイル・CSV取り込み先・補充通知先がないと運用できないため必須にする。
             $this->requireNumeric('form_low_stock_threshold');
 
             foreach ([
@@ -152,6 +162,8 @@ final class Config
                 throw new RuntimeException('Config value must be greater than 0: form_low_stock_threshold');
             }
         } elseif (trim($this->formUrl()) === '') {
+            // form_stock_enabled=false はテスト用の固定URLモード。
+            // form_url が空のまま送ると利用者に無効な安否確認を出すため、起動時に止める。
             throw new RuntimeException('Missing required config value when form stock is disabled: form_url');
         }
 
@@ -176,6 +188,8 @@ final class Config
 
     private function requireBooleanIfPresent(string $key): void
     {
+        // 文字列の true/false も許容するが、typo は見逃さない。
+        // 例: fals のような値を false と誤解釈すると、本番で固定URL運用になる恐れがある。
         if (!array_key_exists($key, $this->values)) {
             return;
         }

@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 final class StateStore
 {
+    // state.json は「どの地震を通知済みにしたか」を保持するファイル。
+    // dedupe_key を保存し、同じ地震の二重通知を防ぐために使う。
     private string $path;
 
     /** @var array<string, mixed>|null */
@@ -15,6 +17,8 @@ final class StateStore
 
     public function has(string $dedupeKey): bool
     {
+        // stateに存在するdedupe_keyは通知済みとして扱う。
+        // event.idではなく、EarthquakeCheckerで生成した地震単位のキーを見る。
         $state = $this->load();
 
         return isset($state['notified'][$dedupeKey]);
@@ -23,6 +27,8 @@ final class StateStore
     /** @param array<string, mixed> $record */
     public function markNotified(string $dedupeKey, array $record): void
     {
+        // LINE WORKS送信成功後にだけ呼ぶこと。
+        // 送信前に通知済みにすると、送信失敗時に通知漏れが起きる。
         $this->load();
         $record['dedupe_key'] = $dedupeKey;
         $this->state['notified'][$dedupeKey] = $record;
@@ -30,6 +36,8 @@ final class StateStore
 
     public function save(): void
     {
+        // state.json は一時ファイルへ書いてからrenameで置き換える。
+        // 直接上書きして途中で止まると、不正JSONになり再通知事故につながる。
         $this->load();
 
         $dir = dirname($this->path);
@@ -58,6 +66,8 @@ final class StateStore
     /** @return array<string, mixed> */
     private function load(): array
     {
+        // 既存stateが不正JSONなら空扱いせず停止する。
+        // 空扱いすると過去の通知済み情報が消え、同じ地震を再通知する可能性がある。
         if ($this->state !== null) {
             return $this->state;
         }

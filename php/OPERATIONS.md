@@ -20,6 +20,17 @@ php php/bin/check.php
 
 `form_stock_enabled=false` は本番のフォーム再利用を許すための機能ではありません。本番で使うと同じフォームURLに複数地震の回答が混ざるため、原則として本番では `true` に戻してください。`false` で `form_url` が空の場合は、安全のため起動時にエラー停止します。
 
+## PHPファイルの役割
+
+- `php/bin/check.php`: cron / タスクスケジューラから呼ぶ入口です。lock取得、設定読み込み、各Store/Client生成、`EarthquakeChecker` 実行を担当します。
+- `php/src/Config.php`: `config.php` の読み込みと必須設定の検証を担当します。`form_stock_enabled` の本番/テスト切り替えもここで検証します。
+- `php/src/EarthquakeChecker.php`: 地震取得後の通知対象抽出、重複判定、フォームURL解決、LINE WORKS送信、state/form更新順序を管理します。
+- `php/src/P2PQuakeClient.php`: P2PQuake APIから地震情報を取得します。通知漏れ防止のため、最新1件だけにしない方針です。
+- `php/src/LineWorksClient.php`: LINE WORKSのtoken取得とBotメッセージ送信を担当します。tokenやsecretはログに出しません。
+- `php/src/StateStore.php`: `state.json` に通知済み `dedupe_key` を保存し、二重通知を防ぎます。
+- `php/src/FormStockStore.php`: `forms.csv` の取り込み、`forms.json` の保存、フォームURLのavailable/used管理を担当します。
+- `php/src/Logger.php`: `app.log` へ運用ログを追記します。外部共有前には秘密値や実URLが含まれていないか確認してください。
+
 ## フォームURL補充手順
 
 1. Excelなどで1列だけのCSVを作成します。
@@ -66,7 +77,7 @@ PHP版では原則として `earthquake.time|hypocenter.name` を重複判定キ
 
 - `php/config.php` が配置されている。
 - `php/secrets/private.key` が配置されている。
-- `notify_scale` が本番条件、通常は震度5弱相当の45以上になっている。
+- `notify_scale` が本番条件、通常は震度5弱相当の45以上になっている。テスト用の0のままにしない。
 - Botが安否確認通知先ルームに参加している。
 - Botが補充通知先ルームに参加している。
 - `form_low_stock_room_id` が安否確認通知先とは別の補充通知先になっている。

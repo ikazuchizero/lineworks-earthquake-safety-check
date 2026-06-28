@@ -3,11 +3,15 @@ declare(strict_types=1);
 
 final class P2PQuakeClient
 {
+    // P2PQuake APIから地震情報を取得するだけのクラス。
+    // 通知判定や重複判定はEarthquakeChecker側で行い、ここではレスポンスを大きく加工しない。
     private string $apiUrl;
     private int $limit;
 
     public function __construct(string $apiUrl, int $limit = 10)
     {
+        // limit=1は禁止。対象地震の直後に対象外情報が最新になると通知漏れするため、
+        // 呼び出し側では複数件、現在は10件を見る前提にしている。
         if ($limit < 2) {
             throw new InvalidArgumentException('P2PQuake limit must be greater than 1.');
         }
@@ -19,6 +23,8 @@ final class P2PQuakeClient
     /** @return array<int, array<string, mixed>> */
     public function fetchEarthquakes(): array
     {
+        // 外部APIなので、HTTP失敗・JSON不正・想定外の形は例外で止める。
+        // 不完全なデータを空扱いすると通知漏れの原因になる。
         $url = $this->buildUrl();
         $headers = [];
         $body = $this->request('GET', $url, [], null, $headers);
@@ -43,6 +49,8 @@ final class P2PQuakeClient
 
     private function buildUrl(): string
     {
+        // 既存クエリがあっても limit を明示的に上書きする。
+        // 運用上の通知漏れ防止条件をURL設定側のミスで崩さないため。
         $parts = parse_url($this->apiUrl);
 
         if ($parts === false || !isset($parts['scheme'], $parts['host'])) {
@@ -72,6 +80,8 @@ final class P2PQuakeClient
      */
     private function request(string $method, string $url, array $requestHeaders, ?string $body, array &$responseHeaders): string
     {
+        // 外部API通信はタイムアウト付きにする。
+        // cronが詰まり続けると次回実行やlockに影響するため。
         $options = [
             'http' => [
                 'method' => $method,
@@ -108,6 +118,8 @@ final class P2PQuakeClient
     /** @param array<int, string> $headers */
     private function statusCodeFromHeaders(array $headers): int
     {
+        // HTTP/1.1 200 OK のようなステータス行から3桁コードを取り出す。
+        // 取得失敗は例外にして、古いstateやフォーム状態を不用意に更新しない。
         foreach ($headers as $header) {
             if (preg_match('#^HTTP/\S+\s+(\d{3})#', $header, $matches)) {
                 return (int) $matches[1];

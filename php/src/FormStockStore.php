@@ -231,6 +231,8 @@ final class FormStockStore
 
     private function moveImportFile(string $directory): void
     {
+        // 取り込み後のCSVは削除せず processed/ または failed/ に残す。
+        // 非エンジニア運用で「アップロードしたCSVがどうなったか」を追えるようにするため。
         if (!is_dir($directory) && !mkdir($directory, 0775, true)) {
             throw new RuntimeException('Failed to create form import archive directory.');
         }
@@ -286,6 +288,8 @@ final class FormStockStore
 
     private function now(): string
     {
+        // forms.jsonの時刻は運用者が追いやすいようAsia/TokyoのISO8601で保存する。
+        // 地震発生時刻の表示処理とは別で、フォーム在庫の操作時刻を記録するため。
         return (new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo')))->format(DateTimeInterface::ATOM);
     }
 }

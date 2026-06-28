@@ -18,6 +18,7 @@ return [
     'lineworks_token_url' => 'https://auth.worksmobile.com/oauth2/v2.0/token',
 
     // LINE WORKSの認証情報と、安否確認通知を送るチャットルーム。
+    // 本番前にBotが対象roomへ参加済みか確認すること。
     // 実値は php/config.php にだけ書く。
     'client_id' => '',
     'client_secret' => '',
@@ -56,5 +57,6 @@ return [
 
     // フォーム補充・枯渇通知を送るメンテナンス用チャットルーム。
     // 安否確認通知先の room_id とは別にすること。
+    // Botがこのroomにも参加していないと、在庫不足に気づけない。
     'form_low_stock_room_id' => '',
 ];
