@@ -1,9 +1,9 @@
-/config.php
-/secrets/private.key
-/storage/state.json
-/storage/app.log
-/storage/*.tmp
-/storage/check.lock
+/php/config.php
+/php/secrets/private.key
+/php/storage/state.json
+/php/storage/app.log
+/php/storage/*.tmp
+/php/storage/check.lock
 
-!/secrets/.gitkeep
-!/storage/.gitkeep
+!/php/secrets/.gitkeep
+!/php/storage/.gitkeep
