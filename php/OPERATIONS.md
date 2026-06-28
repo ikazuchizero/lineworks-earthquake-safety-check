@@ -12,6 +12,14 @@ php php/bin/check.php
 
 本番ではXserverなどのcronから同じ入口を定期実行する想定です。多重実行は lock ファイルと flock() で防ぎます。
 
+## 本番/テストのフォームURL設定
+
+本番では `form_stock_enabled=true` を推奨します。`forms.json` の `available` フォームURLを1件ずつ使い、LINE WORKS送信成功後にだけ `used` にします。フォーム枯渇通知と低在庫通知もこのモードで動きます。
+
+ローカル/テストで毎回フォームURLを大量に作るのが難しい場合だけ、`form_stock_enabled=false` にできます。この場合は `forms.json` / `forms.csv` を使わず、`config.php` の `form_url` を固定フォームURLとして送信します。フォームは `used` にならず、低在庫通知・枯渇通知も送りません。
+
+`form_stock_enabled=false` は本番のフォーム再利用を許すための機能ではありません。本番で使うと同じフォームURLに複数地震の回答が混ざるため、原則として本番では `true` に戻してください。`false` で `form_url` が空の場合は、安全のため起動時にエラー停止します。
+
 ## フォームURL補充手順
 
 1. Excelなどで1列だけのCSVを作成します。
@@ -37,7 +45,8 @@ https://example.com/form/002
 - LINE WORKS送信が成功した後だけ `used` になります。
 - `used` のURLは再利用しません。
 - 使用済みURLをCSVで再投入しても `available` には戻りません。
-- フォームURLが0件のときは、固定URLへfallbackせず、安否確認通知を送らずに補充通知先へ枯渇通知します。
+- `form_stock_enabled=true` では、フォームURLが0件のときに固定URLへfallbackせず、安否確認通知を送らずに補充通知先へ枯渇通知します。
+- `form_stock_enabled=false` のテスト時だけ、固定 `form_url` を使います。このモードではフォーム消費・低在庫通知・枯渇通知は行いません。
 
 ## 地震通知の重複防止
 
@@ -61,6 +70,7 @@ PHP版では原則として `earthquake.time|hypocenter.name` を重複判定キ
 - Botが安否確認通知先ルームに参加している。
 - Botが補充通知先ルームに参加している。
 - `form_low_stock_room_id` が安否確認通知先とは別の補充通知先になっている。
+- 本番では `form_stock_enabled=true` になっている。
 - `php/storage/forms.json` に十分な `available` がある。
 - `php/storage/` と `php/storage/import/` 以下にPHPから書き込み権限がある。
 
@@ -82,4 +92,4 @@ PHP版では原則として `earthquake.time|hypocenter.name` を重複判定キ
 - `php/storage/import/processed/*.csv`
 - `php/storage/import/failed/*.csv`
 - `php/storage/app.log`
-- access token、JWT、room_id、bot_id、client_secretなどの秘密値やID
+- アクセストークン、JWT、room_id、bot_id、client_secretなどの秘密値やID

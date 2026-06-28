@@ -75,6 +75,15 @@ final class Config
         return (string) ($this->values['form_url'] ?? '');
     }
 
+    public function formStockEnabled(): bool
+    {
+        if (!array_key_exists('form_stock_enabled', $this->values)) {
+            return true;
+        }
+
+        return (bool) filter_var($this->values['form_stock_enabled'], FILTER_VALIDATE_BOOLEAN);
+    }
+
     public function privateKeyPath(): string
     {
         return (string) $this->values['private_key_path'];
@@ -82,38 +91,38 @@ final class Config
 
     public function formStockPath(): string
     {
-        return (string) $this->values['form_stock_path'];
+        return (string) ($this->values['form_stock_path'] ?? dirname(__DIR__) . '/storage/forms.json');
     }
 
     public function formImportCsvPath(): string
     {
-        return (string) $this->values['form_import_csv_path'];
+        return (string) ($this->values['form_import_csv_path'] ?? dirname(__DIR__) . '/storage/import/forms.csv');
     }
 
     public function formImportProcessedDir(): string
     {
-        return (string) $this->values['form_import_processed_dir'];
+        return (string) ($this->values['form_import_processed_dir'] ?? dirname(__DIR__) . '/storage/import/processed');
     }
 
     public function formImportFailedDir(): string
     {
-        return (string) $this->values['form_import_failed_dir'];
+        return (string) ($this->values['form_import_failed_dir'] ?? dirname(__DIR__) . '/storage/import/failed');
     }
 
     public function formLowStockThreshold(): int
     {
-        return (int) $this->values['form_low_stock_threshold'];
+        return (int) ($this->values['form_low_stock_threshold'] ?? 10);
     }
 
     public function formLowStockRoomId(): string
     {
-        return (string) $this->values['form_low_stock_room_id'];
+        return (string) ($this->values['form_low_stock_room_id'] ?? '');
     }
 
     private function validate(): void
     {
         $this->requireNumeric('notify_scale');
-        $this->requireNumeric('form_low_stock_threshold');
+        $this->requireBooleanIfPresent('form_stock_enabled');
 
         foreach ([
             'client_id',
@@ -122,17 +131,28 @@ final class Config
             'bot_id',
             'room_id',
             'private_key_path',
-            'form_stock_path',
-            'form_import_csv_path',
-            'form_import_processed_dir',
-            'form_import_failed_dir',
-            'form_low_stock_room_id',
         ] as $key) {
             $this->requireNonEmptyString($key);
         }
 
-        if ($this->formLowStockThreshold() < 1) {
-            throw new RuntimeException('Config value must be greater than 0: form_low_stock_threshold');
+        if ($this->formStockEnabled()) {
+            $this->requireNumeric('form_low_stock_threshold');
+
+            foreach ([
+                'form_stock_path',
+                'form_import_csv_path',
+                'form_import_processed_dir',
+                'form_import_failed_dir',
+                'form_low_stock_room_id',
+            ] as $key) {
+                $this->requireNonEmptyString($key);
+            }
+
+            if ($this->formLowStockThreshold() < 1) {
+                throw new RuntimeException('Config value must be greater than 0: form_low_stock_threshold');
+            }
+        } elseif (trim($this->formUrl()) === '') {
+            throw new RuntimeException('Missing required config value when form stock is disabled: form_url');
         }
 
         if (!is_readable($this->privateKeyPath())) {
@@ -151,6 +171,17 @@ final class Config
     {
         if (!array_key_exists($key, $this->values) || !is_numeric($this->values[$key])) {
             throw new RuntimeException('Config value must be numeric: ' . $key);
+        }
+    }
+
+    private function requireBooleanIfPresent(string $key): void
+    {
+        if (!array_key_exists($key, $this->values)) {
+            return;
+        }
+
+        if (filter_var($this->values[$key], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) === null) {
+            throw new RuntimeException('Config value must be boolean: ' . $key);
         }
     }
 }

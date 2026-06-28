@@ -7,9 +7,9 @@ final class FormImportException extends RuntimeException
 
 final class FormStockStore
 {
-    // forms.json is the operational source of truth for safety-confirmation forms.
-    // Each URL must be used at most once. Do not log or print URL values because the
-    // links are real response forms and leaking them can expose or corrupt responses.
+    // forms.json は安否確認フォームURLの運用上の正本。
+    // 各URLは最大1回だけ使う。実フォームURLは回答用リンクそのものなので、
+    // 漏洩や誤回答を防ぐためログや標準出力へ出さない。
     private string $path;
     private string $importCsvPath;
     private string $processedDir;
@@ -29,9 +29,9 @@ final class FormStockStore
     /** @return array{processed: bool, imported: int, duplicate_skipped: int, invalid_rows: int} */
     public function importCsvIfExists(): array
     {
-        // Non-engineers replenish forms by uploading storage/import/forms.csv.
-        // Successful imports are archived under processed/; failed imports are moved
-        // to failed/ so the uploaded file is not retried forever without inspection.
+        // 非エンジニア担当者は storage/import/forms.csv をアップロードして補充する。
+        // 成功したCSVは processed/ へ、失敗したCSVは failed/ へ移動し、
+        // 問題のあるCSVを無限に再処理し続けないようにする。
         if (!is_file($this->importCsvPath)) {
             return [
                 'processed' => false,
@@ -56,8 +56,8 @@ final class FormStockStore
     /** @return array{index: int, url: string}|null */
     public function takeAvailable(): ?array
     {
-        // Only available forms can be selected. Used forms are never returned, even
-        // if the same URL later appears in an uploaded CSV.
+        // 選べるのは available のフォームだけ。
+        // used のフォームは、後から同じURLがCSVに入っても再利用しない。
         $data = $this->load();
 
         foreach ($data['forms'] as $index => $form) {
@@ -74,8 +74,8 @@ final class FormStockStore
 
     public function markUsed(int $index, string $dedupeKey): void
     {
-        // Called only after LINE WORKS send succeeds. Marking a form used before send
-        // would lose the form when delivery fails.
+        // LINE WORKS送信成功後にだけ呼ぶ。
+        // 送信前にusedへ変えると、配信失敗時にフォームだけ失われる。
         $this->load();
 
         if (!isset($this->data['forms'][$index]) || !is_array($this->data['forms'][$index])) {
@@ -120,8 +120,8 @@ final class FormStockStore
 
     public function save(): void
     {
-        // Save through a temporary file and rename. Directly overwriting forms.json
-        // risks leaving a truncated file if the process is interrupted.
+        // forms.json は一時ファイルに書いてからrenameで置き換える。
+        // 直接上書きすると、処理中断時に壊れたJSONが残る可能性がある。
         $this->load();
 
         $dir = dirname($this->path);
@@ -150,11 +150,11 @@ final class FormStockStore
     /** @return array{processed: bool, imported: int, duplicate_skipped: int, invalid_rows: int} */
     private function importCsv(): array
     {
-        // CSV contract for operators:
-        //   Row 1: URL
-        //   Row 2+: one form URL per row
-        // Empty rows are ignored. Existing URLs are counted as duplicates, not added.
-        // This means re-uploading a used URL does not make it available again.
+        // CSV運用ルール:
+        //   1行目: URL
+        //   2行目以降: フォームURLを1行に1件
+        // 空行は無視する。既存URLは重複として数え、追加しない。
+        // 使用済みURLを再アップロードしても available には戻さない。
         $this->load();
 
         $handle = fopen($this->importCsvPath, 'r');
@@ -181,7 +181,7 @@ final class FormStockStore
                 }
 
                 if (filter_var($url, FILTER_VALIDATE_URL) === false) {
-                    // Count invalid rows but do not include the URL in logs/errors.
+                    // 不正行は件数だけ数える。URL本文はログやエラーに含めない。
                     $invalidRows++;
                     continue;
                 }
@@ -216,8 +216,8 @@ final class FormStockStore
     /** @return array<string, bool> */
     private function knownUrls(): array
     {
-        // Include both available and used URLs. This prevents accidental reuse when
-        // an old CSV is uploaded again.
+        // available と used の両方を既知URLとして扱う。
+        // 古いCSVを再アップロードしても使用済みフォームを再利用しないため。
         $known = [];
 
         foreach ($this->data['forms'] as $form) {
@@ -245,8 +245,8 @@ final class FormStockStore
     /** @return array<string, mixed> */
     private function load(): array
     {
-        // Invalid JSON must stop processing. Treating a broken forms.json as empty
-        // could make the bot skip notifications or recreate stock incorrectly.
+        // 不正JSONは処理停止にする。
+        // 壊れた forms.json を空扱いすると、在庫状態を誤認して通知漏れや誤補充につながる。
         if ($this->data !== null) {
             return $this->data;
         }
