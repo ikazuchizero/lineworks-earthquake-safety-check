@@ -168,7 +168,7 @@ final class Config
         }
 
         if (!is_readable($this->privateKeyPath())) {
-            throw new RuntimeException('Private key file is not readable: ' . $this->privateKeyPath());
+            throw new RuntimeException('Private key file is not readable.');
         }
     }
 

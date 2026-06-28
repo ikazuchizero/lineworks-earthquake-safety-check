@@ -31,7 +31,9 @@ final class P2PQuakeClient
         $statusCode = $this->statusCodeFromHeaders($headers);
 
         if ($statusCode < 200 || $statusCode >= 300) {
-            throw new RuntimeException('P2PQuake API failed. HTTP:' . $statusCode . ' ' . $body);
+            // P2PQuakeにはcredentialを送らないが、外部APIレスポンスbodyをログへ残す必要はない。
+            // 調査に必要なHTTP statusだけ残す。
+            throw new RuntimeException('P2PQuake API request failed. HTTP status: ' . $statusCode);
         }
 
         $json = json_decode($body, true);
@@ -97,8 +99,7 @@ final class P2PQuakeClient
         $responseHeaders = $http_response_header ?? [];
 
         if ($response === false) {
-            $error = error_get_last();
-            throw new RuntimeException('HTTP request failed: ' . ($error['message'] ?? $url));
+            throw new RuntimeException('P2PQuake HTTP request failed.');
         }
 
         return $response;

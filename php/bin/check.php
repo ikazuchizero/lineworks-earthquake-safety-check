@@ -75,7 +75,9 @@ try {
     // 送信失敗やstate破損を握りつぶして正常終了すると、運用側が異常に気づけない。
     $exitCode = 1;
     $logger->error('Check failed.', ['error' => $e->getMessage()]);
-    fwrite(STDERR, $e->getMessage() . PHP_EOL);
+    // cronメールや検証環境の標準エラーへ詳細例外を流さない。
+    // 詳細はapp.logに集約し、LINE WORKS系の例外は秘匿値を含まない文面にしておく。
+    fwrite(STDERR, 'Check failed. See app.log.' . PHP_EOL);
 } finally {
     // 途中で例外が出てもロックは必ず解放する。
     // 次回cronが永久に動けなくなる事故を避けるため。

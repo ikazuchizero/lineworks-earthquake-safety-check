@@ -42,7 +42,7 @@ final class LineWorksClient
         // 送信失敗時は必ず例外にする。
         // 呼び出し側がstate保存やフォームused化を行わないようにするため。
         if ($statusCode < 200 || $statusCode >= 300) {
-            throw new RuntimeException('LINE WORKS send failed. HTTP:' . $statusCode . ' ' . $body);
+            throw new RuntimeException('LINE WORKS message send failed. HTTP status: ' . $statusCode);
         }
     }
 
@@ -73,7 +73,7 @@ final class LineWorksClient
         }
 
         if ($statusCode !== 200 || !is_array($json) || empty($json['access_token'])) {
-            throw new RuntimeException('LINE WORKS token failed. HTTP:' . $statusCode . ' ' . $body);
+            throw new RuntimeException('LINE WORKS token request failed. HTTP status: ' . $statusCode);
         }
 
         return (string) $json['access_token'];
@@ -158,8 +158,9 @@ final class LineWorksClient
         $responseHeaders = $http_response_header ?? [];
 
         if ($response === false) {
-            $error = error_get_last();
-            throw new RuntimeException('HTTP request failed: ' . ($error['message'] ?? $url));
+            // error_get_last() には送信先URLやHTTPヘッダー由来の情報が含まれる可能性がある。
+            // room_id、bot_id、tokenなどをcronメールやapp.logへ流さないため、詳細は出さない。
+            throw new RuntimeException('LINE WORKS HTTP request failed.');
         }
 
         return $response;
