@@ -37,7 +37,7 @@ php php/bin/check.php
 2. 1行目のヘッダーは `URL` にします。
 3. 2行目以降にフォームURLを1件ずつ入れます。
 4. ファイル名を `forms.csv` にします。
-5. `php/storage/import/forms.csv` にアップロードします。
+5. `php/forms/forms.csv` にアップロードします。
 6. 次回cron実行時に取り込まれます。
 
 CSV例です。これは形式例であり、実URLはここへ書かないでください。
@@ -48,7 +48,7 @@ https://example.com/form/001
 https://example.com/form/002
 ```
 
-取り込みに成功したCSVは `php/storage/import/processed/` に日時付きで移動します。取り込みに失敗したCSVは `php/storage/import/failed/` に移動します。URL本文はログに出さず、件数だけを確認します。
+取り込みに成功したCSVは `php/forms/processed/` に日時付きで移動します。取り込みに失敗したCSVは `php/forms/failed/` に移動します。URL本文はログに出さず、件数だけを確認します。
 
 ## フォームURLの安全ルール
 
@@ -83,15 +83,17 @@ PHP版では原則として `earthquake.time|hypocenter.name` を重複判定キ
 - `form_low_stock_room_id` が安否確認通知先とは別の補充通知先になっている。
 - 本番では `form_stock_enabled=true` になっている。
 - `php/storage/forms.json` に十分な `available` がある。
-- `php/storage/` と `php/storage/import/` 以下にPHPから書き込み権限がある。
+- `php/storage/` と `php/forms/` 以下にPHPから書き込み権限がある。
 
 ## 障害時に見る場所
+
+`php/storage/` はstate/log/forms.jsonなどの内部状態・ログ用です。通常のフォーム補充担当者は `php/forms/` だけを触る運用にしてください。
 
 - `php/storage/app.log`: 実行結果、skip理由、送信失敗、CSV取り込み件数を確認します。秘密値やURL本文は出さない方針です。
 - `php/storage/state.json`: 通知済み地震の重複判定状態を確認します。壊れている場合は空扱いせず停止します。
 - `php/storage/forms.json`: フォームURLの `available` / `used` 状態を確認します。実URLを外部に貼らないでください。
-- `php/storage/import/processed/`: 取り込み済みCSVを確認します。
-- `php/storage/import/failed/`: 失敗CSVを確認します。ヘッダーが `URL` か、URL列が正しいかを確認します。
+- `php/forms/processed/`: 取り込み済みCSVを確認します。
+- `php/forms/failed/`: 失敗CSVを確認します。ヘッダーが `URL` か、URL列が正しいかを確認します。
 
 ## 絶対にGitへ入れないもの
 
@@ -99,8 +101,8 @@ PHP版では原則として `earthquake.time|hypocenter.name` を重複判定キ
 - `php/secrets/private.key`
 - `php/storage/state.json`
 - `php/storage/forms.json`
-- `php/storage/import/forms.csv`
-- `php/storage/import/processed/*.csv`
-- `php/storage/import/failed/*.csv`
+- `php/forms/forms.csv`
+- `php/forms/processed/*.csv`
+- `php/forms/failed/*.csv`
 - `php/storage/app.log`
 - アクセストークン、JWT、room_id、bot_id、client_secretなどの秘密値やID

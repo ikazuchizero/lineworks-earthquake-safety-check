@@ -102,17 +102,17 @@ final class Config
 
     public function formImportCsvPath(): string
     {
-        return (string) ($this->values['form_import_csv_path'] ?? dirname(__DIR__) . '/storage/import/forms.csv');
+        return (string) ($this->values['form_import_csv_path'] ?? dirname(__DIR__) . '/forms/forms.csv');
     }
 
     public function formImportProcessedDir(): string
     {
-        return (string) ($this->values['form_import_processed_dir'] ?? dirname(__DIR__) . '/storage/import/processed');
+        return (string) ($this->values['form_import_processed_dir'] ?? dirname(__DIR__) . '/forms/processed');
     }
 
     public function formImportFailedDir(): string
     {
-        return (string) ($this->values['form_import_failed_dir'] ?? dirname(__DIR__) . '/storage/import/failed');
+        return (string) ($this->values['form_import_failed_dir'] ?? dirname(__DIR__) . '/forms/failed');
     }
 
     public function formLowStockThreshold(): int

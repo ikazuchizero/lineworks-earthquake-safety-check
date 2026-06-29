@@ -8,10 +8,15 @@
 !/php/secrets/.gitkeep
 !/php/storage/.gitkeep
 /php/storage/forms.json
+/php/forms/forms.csv
+/php/forms/processed/*.csv
+/php/forms/failed/*.csv
+
+!/php/forms/.gitkeep
+!/php/forms/processed/.gitkeep
+!/php/forms/failed/.gitkeep
+
+# Legacy local import archives may still exist on developer machines.
 /php/storage/import/forms.csv
 /php/storage/import/processed/*.csv
 /php/storage/import/failed/*.csv
-
-!/php/storage/import/.gitkeep
-!/php/storage/import/processed/.gitkeep
-!/php/storage/import/failed/.gitkeep

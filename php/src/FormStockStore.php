@@ -29,7 +29,7 @@ final class FormStockStore
     /** @return array{processed: bool, imported: int, duplicate_skipped: int, invalid_rows: int} */
     public function importCsvIfExists(): array
     {
-        // 非エンジニア担当者は storage/import/forms.csv をアップロードして補充する。
+        // 非エンジニア担当者は forms/forms.csv をアップロードして補充する。
         // 成功したCSVは processed/ へ、失敗したCSVは failed/ へ移動し、
         // 問題のあるCSVを無限に再処理し続けないようにする。
         if (!is_file($this->importCsvPath)) {
@@ -164,7 +164,7 @@ final class FormStockStore
 
         try {
             $header = fgetcsv($handle);
-            if ($header === false || !isset($header[0]) || strtolower(trim((string) $header[0])) !== 'url') {
+            if ($header === false || !isset($header[0]) || strtolower(trim($this->removeUtf8Bom((string) $header[0]))) !== 'url') {
                 throw new FormImportException('Form import CSV header must be URL.');
             }
 
@@ -211,6 +211,13 @@ final class FormStockStore
             'duplicate_skipped' => $duplicateSkipped,
             'invalid_rows' => $invalidRows,
         ];
+    }
+
+    private function removeUtf8Bom(string $value): string
+    {
+        // Excelなどで作成したCSVは、先頭ヘッダーにUTF-8 BOMが付くことがある。
+        // BOM付きでも URL ヘッダーとして扱えるよう、URL本文は出力せずヘッダーだけ正規化する。
+        return preg_replace('/^\xEF\xBB\xBF/', '', $value) ?? $value;
     }
 
     /** @return array<string, bool> */

@@ -44,12 +44,12 @@ return [
     // available のフォームURLは、LINE WORKS送信成功後にだけ used へ変わる。
     'form_stock_path' => __DIR__ . '/storage/forms.json',
 
-    // フォームURL補充CSVの取り込み先。
-    // 1行目を URL、2行目以降をフォームURLにした forms.csv を配置する。
-    // 成功したCSVは processed/、失敗したCSVは failed/ へ移動する。
-    'form_import_csv_path' => __DIR__ . '/storage/import/forms.csv',
-    'form_import_processed_dir' => __DIR__ . '/storage/import/processed',
-    'form_import_failed_dir' => __DIR__ . '/storage/import/failed',
+    // フォームURL補充CSVの取り込み先。非エンジニア担当者が触りやすいよう、内部状態用の storage/ ではなく php/forms/ を使う。
+    // 1行目を URL、2行目以降をフォームURLにした forms.csv を php/forms/ に配置する。
+    // 成功したCSVは php/forms/processed/、失敗したCSVは php/forms/failed/ へ移動する。
+    'form_import_csv_path' => __DIR__ . '/forms/forms.csv',
+    'form_import_processed_dir' => __DIR__ . '/forms/processed',
+    'form_import_failed_dir' => __DIR__ . '/forms/failed',
 
     // 低在庫通知のしきい値。判定は「以下」。
     // 10なら、フォーム消費後の残数が10件以下になったとき補充通知する。
