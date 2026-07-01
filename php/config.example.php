@@ -10,6 +10,10 @@ return [
     // 本番では通常、震度5弱相当の45以上へ戻すこと。
     'notify_scale' => 0,
 
+    // 震源地が空のUNKNOWN情報は即通知せず、震源地名ありの続報を待つ秒数。
+    // デフォルトは600秒。短すぎるとUNKNOWNで先に通知され、長すぎると安否確認が遅れる。
+    'unknown_hypocenter_hold_seconds' => 600,
+
     // P2PQuakeの取得先。php/bin/check.php では limit=10 で取得する。
     // 最新1件だけを見ると、対象外の続報で通知対象地震を見落とす可能性がある。
     'p2pquake_api_url' => 'https://api.p2pquake.net/v2/jma/quake',
