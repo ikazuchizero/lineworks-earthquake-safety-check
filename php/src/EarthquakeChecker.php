@@ -116,14 +116,22 @@ final class EarthquakeChecker
 
                 // state保存も送信成功後に行う。
                 // ここで保存に失敗すると次回再通知の可能性はあるが、通知漏れより安全側に倒す。
-                $this->stateStore->markNotified($target['dedupe_key'], [
+                $notifiedAt = gmdate('c');
+                $record = [
                     'dedupe_key' => $target['dedupe_key'],
                     'event_id' => $target['event_id'],
                     'earthquake_time' => $target['earthquake_time'],
                     'hypocenter_name' => $target['hypocenter_name'],
                     'max_scale' => $target['max_scale'],
-                    'notified_at' => gmdate('c'),
+                    'notified_at' => $notifiedAt,
+                ];
+
+                $this->stateStore->markNotified($target['dedupe_key'], $record);
+                $this->stateStore->markNotifiedByEarthquakeTime((string) $target['earthquake_time'], [
+                    'dedupe_key' => $target['dedupe_key'],
+                    'notified_at' => $notifiedAt,
                 ]);
+                $this->stateStore->removePendingUnknown((string) $target['earthquake_time']);
                 $this->stateStore->save();
             } catch (Throwable $e) {
                 $this->logger->error('State or form save failed after LINE WORKS send succeeded.', $this->logContext($target, [
@@ -262,12 +270,10 @@ final class EarthquakeChecker
      */
     private function selectNotificationTargets(array $events): array
     {
-        // dedupe_key の方針: event.id 単体では同一地震の判定に不十分。
-        // P2PQuake/JMAでは同じ地震でも震度速報、震源情報、続報などで別IDになることがある。
-        // そのため earthquake.time + hypocenter.name を使う。
-        // maxScale は含めない。続報で最大震度が更新されても別通知にしないため。
-        $candidates = [];
-        $hasNamedHypocenterByTime = [];
+        // event.id単体ではなく、dedupe_key と earthquake_time の両方で重複を抑える。
+        // UNKNOWN震源地は即通知せず、震源地名ありの続報を待ってから必要な場合だけ通知する。
+        $candidatesByTime = [];
+        $stateChanged = false;
 
         foreach ($events as $event) {
             if (!is_array($event)) {
@@ -297,40 +303,234 @@ final class EarthquakeChecker
                 continue;
             }
 
-            $candidates[] = $candidate;
-
-            if ($candidate['hypocenter_name'] !== 'UNKNOWN') {
-                $hasNamedHypocenterByTime[(string) $candidate['earthquake_time']] = true;
+            if ($this->stateStore->hasNotifiedEarthquakeTime((string) $candidate['earthquake_time'])) {
+                $this->logger->info('Skipped earthquake event.', $this->logContext($candidate, [
+                    'reason' => 'duplicate_earthquake_time',
+                ]));
+                continue;
             }
+
+            $candidatesByTime[(string) $candidate['earthquake_time']][] = $candidate;
         }
 
         $targets = [];
         $seenDedupeKeys = [];
+        $seenEarthquakeTimes = [];
 
-        foreach ($candidates as $candidate) {
-            if ($candidate['hypocenter_name'] === 'UNKNOWN'
-                && isset($hasNamedHypocenterByTime[(string) $candidate['earthquake_time']])) {
-                // 先に震源地なし、後から震源地ありの情報が同じ取得結果に混在することがある。
-                // 同じ earthquake.time で震源地名あり候補がある場合は、そちらを優先し、
-                // UNKNOWN候補は同一地震として除外する。UNKNOWNしかない場合は通知候補に残す。
-                $this->logger->info('Skipped earthquake event.', $this->logContext($candidate, [
-                    'reason' => 'unknown_hypocenter_has_named_candidate_in_current_batch',
+        foreach ($candidatesByTime as $earthquakeTime => $candidates) {
+            $namedCandidates = array_values(array_filter($candidates, static function (array $candidate): bool {
+                return $candidate['hypocenter_name'] !== 'UNKNOWN';
+            }));
+
+            if ($namedCandidates !== []) {
+                $candidate = $namedCandidates[0];
+
+                if ($this->stateStore->getPendingUnknown($earthquakeTime) !== null) {
+                    $this->logger->info('Named hypocenter candidate replaces pending UNKNOWN.', $this->logContext($candidate, [
+                        'reason' => 'named_hypocenter_replaces_pending_unknown',
+                    ]));
+                }
+
+                $this->addTargetIfNotSeen($targets, $seenDedupeKeys, $seenEarthquakeTimes, $candidate);
+
+                foreach ($candidates as $skippedCandidate) {
+                    if ($skippedCandidate === $candidate) {
+                        continue;
+                    }
+
+                    $reason = $skippedCandidate['hypocenter_name'] === 'UNKNOWN'
+                        ? 'unknown_hypocenter_has_named_candidate_in_current_batch'
+                        : 'duplicate_earthquake_time_in_current_batch';
+
+                    $this->logger->info('Skipped earthquake event.', $this->logContext($skippedCandidate, [
+                        'reason' => $reason,
+                    ]));
+                }
+
+                continue;
+            }
+
+            $unknownCandidate = $candidates[0];
+            $pending = $this->stateStore->getPendingUnknown($earthquakeTime);
+
+            if ($pending === null) {
+                $this->stateStore->markPendingUnknown($earthquakeTime, $this->pendingUnknownRecord($unknownCandidate));
+                $stateChanged = true;
+                $this->logger->info('Skipped earthquake event.', $this->logContext($unknownCandidate, [
+                    'reason' => 'unknown_hypocenter_pending_created',
                 ]));
                 continue;
             }
 
-            if (isset($seenDedupeKeys[$candidate['dedupe_key']])) {
-                $this->logger->info('Skipped earthquake event.', $this->logContext($candidate, [
-                    'reason' => 'duplicate_dedupe_key_in_current_batch',
+            if (!$this->isPendingUnknownExpired($pending)) {
+                $this->logger->info('Skipped earthquake event.', $this->logContext($unknownCandidate, [
+                    'reason' => 'unknown_hypocenter_pending_wait',
                 ]));
                 continue;
             }
 
-            $seenDedupeKeys[$candidate['dedupe_key']] = true;
-            $targets[] = $candidate;
+            $this->logger->info('UNKNOWN hypocenter pending expired.', $this->logContext($unknownCandidate, [
+                'reason' => 'unknown_hypocenter_pending_expired',
+            ]));
+            $this->addTargetIfNotSeen($targets, $seenDedupeKeys, $seenEarthquakeTimes, $unknownCandidate);
+        }
+
+        // ここからは、今回のP2PQuake取得結果に残っていない pending UNKNOWN も確認する。
+        // APIの取得件数には上限があるため、保留中の地震が次回取得結果から消えていても、
+        // 保留時間を過ぎたら UNKNOWN のまま1回だけ通知できるようにする。
+        foreach ($this->stateStore->pendingUnknowns() as $earthquakeTime => $pending) {
+            if ($this->stateStore->hasNotifiedEarthquakeTime($earthquakeTime)) {
+                $this->logger->info('Skipped pending UNKNOWN earthquake.', [
+                    'earthquake_time' => $earthquakeTime,
+                    'reason' => 'duplicate_earthquake_time',
+                ]);
+                $this->stateStore->removePendingUnknown($earthquakeTime);
+                $stateChanged = true;
+                continue;
+            }
+
+            if (isset($seenEarthquakeTimes[$earthquakeTime])) {
+                $this->logger->info('Skipped pending UNKNOWN earthquake.', [
+                    'earthquake_time' => $earthquakeTime,
+                    'reason' => 'duplicate_earthquake_time_in_current_batch',
+                ]);
+                continue;
+            }
+
+            if (!$this->isPendingUnknownExpired($pending)) {
+                $this->logger->info('Skipped pending UNKNOWN earthquake.', [
+                    'earthquake_time' => $earthquakeTime,
+                    'reason' => 'unknown_hypocenter_pending_wait',
+                ]);
+                continue;
+            }
+
+            $candidate = $this->candidateFromPendingUnknown($earthquakeTime, $pending);
+
+            if ($candidate === null) {
+                $this->logger->error('Pending UNKNOWN record is invalid.', [
+                    'earthquake_time' => $earthquakeTime,
+                    'reason' => 'invalid_pending_unknown_record',
+                ]);
+                $this->stateStore->removePendingUnknown($earthquakeTime);
+                $stateChanged = true;
+                continue;
+            }
+
+            if ($candidate['max_scale'] < $this->config->notifyScale()) {
+                $this->logger->info('Skipped pending UNKNOWN earthquake.', $this->logContext($candidate, [
+                    'reason' => 'pending_unknown_below_notify_scale',
+                ]));
+                $this->stateStore->removePendingUnknown($earthquakeTime);
+                $stateChanged = true;
+                continue;
+            }
+
+            $this->logger->info('UNKNOWN hypocenter pending expired.', $this->logContext($candidate, [
+                'reason' => 'unknown_hypocenter_pending_expired_without_current_event',
+            ]));
+            $this->addTargetIfNotSeen($targets, $seenDedupeKeys, $seenEarthquakeTimes, $candidate);
+        }
+
+        if ($stateChanged) {
+            $this->stateStore->save();
         }
 
         return $targets;
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $targets
+     * @param array<string, bool> $seenDedupeKeys
+     * @param array<string, bool> $seenEarthquakeTimes
+     * @param array<string, mixed> $candidate
+     */
+    private function addTargetIfNotSeen(array &$targets, array &$seenDedupeKeys, array &$seenEarthquakeTimes, array $candidate): void
+    {
+        if (isset($seenDedupeKeys[$candidate['dedupe_key']])) {
+            $this->logger->info('Skipped earthquake event.', $this->logContext($candidate, [
+                'reason' => 'duplicate_dedupe_key_in_current_batch',
+            ]));
+            return;
+        }
+
+        if (isset($seenEarthquakeTimes[(string) $candidate['earthquake_time']])) {
+            $this->logger->info('Skipped earthquake event.', $this->logContext($candidate, [
+                'reason' => 'duplicate_earthquake_time_in_current_batch',
+            ]));
+            return;
+        }
+
+        $seenDedupeKeys[$candidate['dedupe_key']] = true;
+        $seenEarthquakeTimes[(string) $candidate['earthquake_time']] = true;
+        $targets[] = $candidate;
+    }
+
+    /** @param array<string, mixed> $candidate */
+    private function pendingUnknownRecord(array $candidate): array
+    {
+        return [
+            'dedupe_key' => $candidate['dedupe_key'],
+            'event_id' => $candidate['event_id'],
+            'earthquake_time' => $candidate['earthquake_time'],
+            'hypocenter_name' => $candidate['hypocenter_name'],
+            'max_scale' => $candidate['max_scale'],
+            'first_seen_at' => gmdate('c'),
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $pending
+     * @return array<string, mixed>|null
+     */
+    private function candidateFromPendingUnknown(string $earthquakeTime, array $pending): ?array
+    {
+        $pendingEarthquakeTime = trim((string) ($pending['earthquake_time'] ?? $earthquakeTime));
+
+        if ($pendingEarthquakeTime === '') {
+            $pendingEarthquakeTime = $earthquakeTime;
+        }
+
+        if ($pendingEarthquakeTime === '') {
+            return null;
+        }
+
+        $hypocenterName = trim((string) ($pending['hypocenter_name'] ?? 'UNKNOWN'));
+
+        if ($hypocenterName === '') {
+            $hypocenterName = 'UNKNOWN';
+        }
+
+        $dedupeKey = trim((string) ($pending['dedupe_key'] ?? ''));
+
+        if ($dedupeKey === '') {
+            $dedupeKey = $pendingEarthquakeTime . '|' . $hypocenterName;
+        }
+
+        return [
+            'event' => null,
+            'event_id' => $pending['event_id'] ?? null,
+            'earthquake_time' => $pendingEarthquakeTime,
+            'hypocenter_name' => $hypocenterName,
+            'max_scale' => (int) ($pending['max_scale'] ?? 0),
+            'dedupe_key' => $dedupeKey,
+        ];
+    }
+
+    /** @param array<string, mixed> $pending */
+    private function isPendingUnknownExpired(array $pending): bool
+    {
+        $firstSeenAt = (string) ($pending['first_seen_at'] ?? '');
+        $firstSeenTimestamp = strtotime($firstSeenAt);
+
+        if ($firstSeenTimestamp === false) {
+            $this->logger->error('Pending UNKNOWN first_seen_at is invalid.', [
+                'reason' => 'invalid_pending_unknown_first_seen_at',
+            ]);
+            return true;
+        }
+
+        return (time() - $firstSeenTimestamp) >= $this->config->unknownHypocenterHoldSeconds();
     }
 
     /**

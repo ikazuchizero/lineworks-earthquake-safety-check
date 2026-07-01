@@ -125,11 +125,19 @@ final class Config
         return (string) ($this->values['form_low_stock_room_id'] ?? '');
     }
 
+    public function unknownHypocenterHoldSeconds(): int
+    {
+        // UNKNOWN 震源地は即通知せず、震源地名ありの続報を待つ。
+        // 未設定の既存 config.php でも従来運用を壊さないよう、デフォルトは600秒にする。
+        return (int) ($this->values['unknown_hypocenter_hold_seconds'] ?? 600);
+    }
+
     private function validate(): void
     {
         // 起動時に設定不備を止める。
         // 送信途中で不足に気づくと、通知漏れやフォーム消費だけが起きる事故につながる。
         $this->requireNumeric('notify_scale');
+        $this->requireIntegerIfPresent('unknown_hypocenter_hold_seconds');
         $this->requireBooleanIfPresent('form_stock_enabled');
 
         foreach ([
@@ -167,6 +175,10 @@ final class Config
             throw new RuntimeException('Missing required config value when form stock is disabled: form_url');
         }
 
+        if ($this->unknownHypocenterHoldSeconds() <= 0) {
+            throw new RuntimeException('Config value must be greater than 0: unknown_hypocenter_hold_seconds');
+        }
+
         if (!is_readable($this->privateKeyPath())) {
             throw new RuntimeException('Private key file is not readable.');
         }
@@ -184,6 +196,24 @@ final class Config
         if (!array_key_exists($key, $this->values) || !is_numeric($this->values[$key])) {
             throw new RuntimeException('Config value must be numeric: ' . $key);
         }
+    }
+
+    private function requireIntegerIfPresent(string $key): void
+    {
+        if (!array_key_exists($key, $this->values)) {
+            return;
+        }
+
+        $value = $this->values[$key];
+        if (is_int($value)) {
+            return;
+        }
+
+        if (is_string($value) && preg_match('/^-?\d+$/', trim($value)) === 1) {
+            return;
+        }
+
+        throw new RuntimeException('Config value must be integer: ' . $key);
     }
 
     private function requireBooleanIfPresent(string $key): void
