@@ -57,7 +57,7 @@ https://example.com/form/002
 - `used` のURLは再利用しません。
 - 使用済みURLをCSVで再投入しても `available` には戻りません。
 - `form_stock_enabled=true` では、フォームURLが0件のときに固定URLへfallbackしません。対象地震がある場合は安否確認通知を送らず、`skipped_due_to_form_stock_out` として手動対応扱いにします。今回対象となった地震はフォーム補充後もbotから後追い自動送信しません。
-- 対象地震がある場合のフォーム枯渇通知は、同一cron実行内で最大1回だけ送ります。フォーム枯渇により対象となった地震は手動対応扱いになり、フォーム補充後もbotから後追い自動送信しません。対象地震がない平時の在庫0件リマインドは別扱いで、最短6時間に1回だけ送ります。
+- 対象地震がある場合のフォーム枯渇通知は、新規に `skipped_due_to_form_stock_out` として記録された対象地震ごとに送ります。同じ地震はstateにより次回以降繰り返し通知せず、フォーム補充後もbotから後追い自動送信しません。同じ実行内で枯渇通知を送った場合、低在庫通知は重ねません。対象地震がない平時の在庫0件リマインドは別扱いで、最短6時間に1回だけ送ります。
 - `form_stock_enabled=false` のテスト時だけ、固定 `form_url` を使います。このモードではフォーム消費・低在庫通知・枯渇通知は行いません。
 
 ## 地震通知の重複防止
@@ -99,6 +99,20 @@ PHP版では原則として `earthquake.time|hypocenter.name` を重複判定キ
 - `php/storage/forms.json`: フォームURLの `available` / `used` 状態を確認します。実URLを外部に貼らないでください。
 - `php/forms/processed/`: 取り込み済みCSVを確認します。
 - `php/forms/failed/`: 失敗CSVを確認します。ヘッダーが `URL` か、URL列が正しいかを確認します。
+
+## app.logの見方
+
+`app.log` は「対象地震について、送った／送っていない／なぜ送れなかった」を後から確認するためのログです。対象地震がない通常cronでは、毎回INFOログを増やさない方針です。何も起きていない通常運転をログで埋めると、肝心な送信失敗やフォーム枯渇を見落としやすくなるためです。
+
+障害時はまず `ERROR` を見ます。ただし、フォーム枯渇による `skipped_due_to_form_stock_out` は想定内のINFOでも、利用者向け安否確認が送れていない重要な運用イベントです。対象地震を追うときは `earthquake_time` と `dedupe_key` を確認してください。`event_id` は続報で変わることがあるため、重複判定の主キーとしては扱いません。
+
+- `notification_completed`: LINE WORKS送信、フォームURL消費、state保存まで完了しています。フォーム在庫機能が有効な場合は `remaining_forms` で残数も確認できます。
+- `skipped_due_to_form_stock_out`: フォーム枯渇により、利用者向け安否確認は送られていません。この地震は手動判断・手動送信対象で、フォーム補充後もbotから後追い自動送信しません。
+- `form_stock_out_notice_sent`: 対象地震がある状態でフォームが0件だったため、補充通知先へ枯渇通知を送れたことを示します。新規に `skipped_due_to_form_stock_out` として記録された対象地震ごとに送ります。
+- `form_stock_empty_idle_reminder_sent`: 対象地震がない平時にフォーム在庫0件を知らせる保守リマインドです。対象地震ありの枯渇通知とは別扱いで、最短6時間に1回だけ送ります。
+- `form_low_stock_notice_sent`: 地震通知でフォームURLを1件以上消費した実行の最後に、残数が閾値以下だったため低在庫通知を送れたことを示します。
+
+ログや運用メモには、実フォームURL、room_id、bot_id、token、secret、秘密鍵、Authorization header、APIレスポンス全文を書かないでください。外部共有が必要な場合は、先にこれらが含まれていないことを確認してください。
 
 ## 絶対にGitへ入れないもの
 

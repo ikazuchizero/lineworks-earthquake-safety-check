@@ -83,7 +83,7 @@ final class StateStore
     public function stockOutReminderLastAlertedAt(): ?string
     {
         $state = $this->load();
-        $value = $state['stock_out_reminder']['last_alerted_at'] ?? null;
+        $value = $state['last_empty_stock_reminded_at'] ?? ($state['stock_out_reminder']['last_alerted_at'] ?? null);
 
         return is_string($value) && $value !== '' ? $value : null;
     }
@@ -93,7 +93,15 @@ final class StateStore
         // 対象地震がない平時の在庫0件リマインドだけを6時間単位で抑止する。
         // 対象地震を送れなかった場合の枯渇通知とは別状態として扱う。
         $this->load();
+        $this->state['last_empty_stock_reminded_at'] = $alertedAt;
         $this->state['stock_out_reminder']['last_alerted_at'] = $alertedAt;
+    }
+
+    public function clearStockOutReminderAlerted(): void
+    {
+        $this->load();
+        $this->state['last_empty_stock_reminded_at'] = null;
+        $this->state['stock_out_reminder']['last_alerted_at'] = null;
     }
 
     /** @return array<string, mixed>|null */
@@ -219,6 +227,10 @@ final class StateStore
             ];
         }
 
+        if (!array_key_exists('last_empty_stock_reminded_at', $state)) {
+            $state['last_empty_stock_reminded_at'] = $state['stock_out_reminder']['last_alerted_at'] ?? null;
+        }
+
         // Backfill earthquake_time index from existing notified records.
         // 既存state.jsonが notified だけを持っていても、過去通知済みの同一発生時刻を再通知しないため。
         foreach ($state['notified'] as $dedupeKey => $record) {
@@ -258,6 +270,7 @@ final class StateStore
             'stock_out_reminder' => [
                 'last_alerted_at' => null,
             ],
+            'last_empty_stock_reminded_at' => null,
         ];
     }
 }

@@ -64,12 +64,10 @@ final class EarthquakeChecker
         // limit=1 にすると、震度5弱以上の地震直後に震度1などの対象外情報が来た場合、
         // 本来通知すべき地震を見落とす可能性があるため、複数件を確認する。
         $events = $this->p2pQuakeClient->fetchEarthquakes();
-        $this->logger->info('Fetched earthquake events.', ['count' => count($events)]);
 
         // notify_scale は通知対象にする最小震度コード。
         // 0 はテスト用。本番では通常、震度5弱相当の45以上へ戻す必要がある。
         $targets = $this->selectNotificationTargets($events);
-        $this->logger->info('Selected notification targets.', ['count' => count($targets)]);
 
         if ($targets === []) {
             $this->notifyStockOutReminderIfNeeded();
@@ -110,8 +108,6 @@ final class EarthquakeChecker
                 throw $e;
             }
 
-            $this->logger->info('LINE WORKS send succeeded.', $this->logContext($target));
-
             try {
                 if ($this->config->formStockEnabled()) {
                     // LINE WORKSがメッセージを受け付けた後にだけフォーム消費を確定する。
@@ -140,6 +136,12 @@ final class EarthquakeChecker
                 ]);
                 $this->stateStore->removePendingUnknown((string) $target['earthquake_time']);
                 $this->stateStore->save();
+
+                $completionContext = $this->logContext($target);
+                if ($this->config->formStockEnabled()) {
+                    $completionContext['remaining_forms'] = $this->formStockStore->availableCount();
+                }
+                $this->logger->info('notification_completed', $completionContext);
             } catch (Throwable $e) {
                 $this->logger->error('State or form save failed after LINE WORKS send succeeded.', $this->logContext($target, [
                     'error' => $e->getMessage(),
@@ -236,6 +238,10 @@ final class EarthquakeChecker
                 '安否確認フォームURLの残数が少なくなっています。残り未使用フォームURL数: ' . $availableCount . '件。フォームURLを補充してください。'
             );
             $this->lowStockNotifiedThisRun = true;
+            $this->logger->info('form_low_stock_notice_sent', [
+                'available_count' => $availableCount,
+                'threshold' => $threshold,
+            ]);
         } catch (Throwable $e) {
             $this->logger->error('Form low stock notification failed.', [
                 'available_count' => $availableCount,
@@ -264,6 +270,9 @@ final class EarthquakeChecker
         $this->stateStore->markSkippedDueToFormStockOut($target['dedupe_key'], $record);
         $this->stateStore->removePendingUnknown((string) $target['earthquake_time']);
         $this->stateStore->save();
+        $this->logger->info('skipped_due_to_form_stock_out', $this->logContext($target, [
+            'available_count' => 0,
+        ]));
     }
 
     /** @param array<string, mixed> $target */
@@ -271,18 +280,20 @@ final class EarthquakeChecker
     {
         // 対象地震を自動送信できなかったことを知らせる通知。
         // stateへ先に skipped を保存しているため、同じ地震でcronが再実行されても繰り返し送らない。
-        if ($this->stockOutNotifiedThisRun) {
-            return;
-        }
-
+        // このフラグは、同じ実行の最後に低在庫通知を重ねないためだけに使う。
+        // 枯渇通知自体は、新規に stock out skip した対象地震ごとに送る。
         $this->stockOutNotifiedThisRun = true;
 
         try {
             $this->notifyMaintenance(
                 '安否確認フォームURLが枯渇しているため、対象地震の安否確認通知を自動送信できませんでした。今回対象となった地震についてはbotからの自動再送は行いません。必要に応じて手動で安否確認を送信し、フォームURLを補充してください。'
             );
+            $this->logger->info('form_stock_out_notice_sent', $this->logContext($target, [
+                'available_count' => 0,
+            ]));
         } catch (Throwable $e) {
-            $this->logger->error('Form stock out notification failed.', $this->logContext($target, [
+            $this->logger->error('form_stock_out_notice_failed', $this->logContext($target, [
+                'available_count' => 0,
                 'error' => $e->getMessage(),
             ]));
         }
@@ -299,6 +310,10 @@ final class EarthquakeChecker
         }
 
         if ($this->formStockStore->availableCount() > 0) {
+            if ($this->stateStore->stockOutReminderLastAlertedAt() !== null) {
+                $this->stateStore->clearStockOutReminderAlerted();
+                $this->stateStore->save();
+            }
             return;
         }
 
@@ -310,12 +325,20 @@ final class EarthquakeChecker
             }
         }
 
+        $remindedAt = gmdate('c');
+
         try {
             $this->notifyMaintenance('安否確認フォームURLの未使用在庫が0件です。対象地震発生時に自動送信できなくなるため、フォームURLを補充してください。');
-            $this->stateStore->markStockOutReminderAlerted(gmdate('c'));
+            $this->stateStore->markStockOutReminderAlerted($remindedAt);
             $this->stateStore->save();
+            $this->logger->info('form_stock_empty_idle_reminder_sent', [
+                'available_count' => 0,
+                'reminded_at' => $remindedAt,
+            ]);
         } catch (Throwable $e) {
-            $this->logger->error('Form stock out reminder notification failed.', [
+            $this->logger->error('form_stock_empty_idle_reminder_failed', [
+                'available_count' => 0,
+                'reminded_at' => $remindedAt,
                 'error' => $e->getMessage(),
             ]);
         }
@@ -355,23 +378,14 @@ final class EarthquakeChecker
             }
 
             if ($candidate['max_scale'] < $this->config->notifyScale()) {
-                $this->logger->info('Skipped earthquake event.', $this->logContext($candidate, [
-                    'reason' => 'below_notify_scale',
-                ]));
                 continue;
             }
 
             if ($this->stateStore->has($candidate['dedupe_key'])) {
-                $this->logger->info('Skipped earthquake event.', $this->logContext($candidate, [
-                    'reason' => 'duplicate_dedupe_key',
-                ]));
                 continue;
             }
 
             if ($this->stateStore->hasNotifiedEarthquakeTime((string) $candidate['earthquake_time'])) {
-                $this->logger->info('Skipped earthquake event.', $this->logContext($candidate, [
-                    'reason' => 'duplicate_earthquake_time',
-                ]));
                 continue;
             }
 
@@ -379,9 +393,6 @@ final class EarthquakeChecker
                 $this->stateStore->hasSkippedDueToFormStockOut($candidate['dedupe_key'])
                 || $this->stateStore->hasSkippedDueToFormStockOutEarthquakeTime((string) $candidate['earthquake_time'])
             ) {
-                $this->logger->info('Skipped earthquake event.', $this->logContext($candidate, [
-                    'reason' => 'skipped_due_to_form_stock_out',
-                ]));
                 $this->skippedStockOutTargetThisRun = true;
                 continue;
             }
@@ -409,20 +420,6 @@ final class EarthquakeChecker
 
                 $this->addTargetIfNotSeen($targets, $seenDedupeKeys, $seenEarthquakeTimes, $candidate);
 
-                foreach ($candidates as $skippedCandidate) {
-                    if ($skippedCandidate === $candidate) {
-                        continue;
-                    }
-
-                    $reason = $skippedCandidate['hypocenter_name'] === 'UNKNOWN'
-                        ? 'unknown_hypocenter_has_named_candidate_in_current_batch'
-                        : 'duplicate_earthquake_time_in_current_batch';
-
-                    $this->logger->info('Skipped earthquake event.', $this->logContext($skippedCandidate, [
-                        'reason' => $reason,
-                    ]));
-                }
-
                 continue;
             }
 
@@ -439,9 +436,6 @@ final class EarthquakeChecker
             }
 
             if (!$this->isPendingUnknownExpired($pending)) {
-                $this->logger->info('Skipped earthquake event.', $this->logContext($unknownCandidate, [
-                    'reason' => 'unknown_hypocenter_pending_wait',
-                ]));
                 continue;
             }
 
@@ -456,20 +450,12 @@ final class EarthquakeChecker
         // 保留時間を過ぎたら UNKNOWN のまま1回だけ通知できるようにする。
         foreach ($this->stateStore->pendingUnknowns() as $earthquakeTime => $pending) {
             if ($this->stateStore->hasNotifiedEarthquakeTime($earthquakeTime)) {
-                $this->logger->info('Skipped pending UNKNOWN earthquake.', [
-                    'earthquake_time' => $earthquakeTime,
-                    'reason' => 'duplicate_earthquake_time',
-                ]);
                 $this->stateStore->removePendingUnknown($earthquakeTime);
                 $stateChanged = true;
                 continue;
             }
 
             if ($this->stateStore->hasSkippedDueToFormStockOutEarthquakeTime($earthquakeTime)) {
-                $this->logger->info('Skipped pending UNKNOWN earthquake.', [
-                    'earthquake_time' => $earthquakeTime,
-                    'reason' => 'skipped_due_to_form_stock_out',
-                ]);
                 $this->skippedStockOutTargetThisRun = true;
                 $this->stateStore->removePendingUnknown($earthquakeTime);
                 $stateChanged = true;
@@ -477,18 +463,10 @@ final class EarthquakeChecker
             }
 
             if (isset($seenEarthquakeTimes[$earthquakeTime])) {
-                $this->logger->info('Skipped pending UNKNOWN earthquake.', [
-                    'earthquake_time' => $earthquakeTime,
-                    'reason' => 'duplicate_earthquake_time_in_current_batch',
-                ]);
                 continue;
             }
 
             if (!$this->isPendingUnknownExpired($pending)) {
-                $this->logger->info('Skipped pending UNKNOWN earthquake.', [
-                    'earthquake_time' => $earthquakeTime,
-                    'reason' => 'unknown_hypocenter_pending_wait',
-                ]);
                 continue;
             }
 
@@ -505,9 +483,6 @@ final class EarthquakeChecker
             }
 
             if ($this->stateStore->hasSkippedDueToFormStockOut($candidate['dedupe_key'])) {
-                $this->logger->info('Skipped pending UNKNOWN earthquake.', $this->logContext($candidate, [
-                    'reason' => 'skipped_due_to_form_stock_out',
-                ]));
                 $this->skippedStockOutTargetThisRun = true;
                 $this->stateStore->removePendingUnknown($earthquakeTime);
                 $stateChanged = true;
@@ -545,16 +520,10 @@ final class EarthquakeChecker
     private function addTargetIfNotSeen(array &$targets, array &$seenDedupeKeys, array &$seenEarthquakeTimes, array $candidate): void
     {
         if (isset($seenDedupeKeys[$candidate['dedupe_key']])) {
-            $this->logger->info('Skipped earthquake event.', $this->logContext($candidate, [
-                'reason' => 'duplicate_dedupe_key_in_current_batch',
-            ]));
             return;
         }
 
         if (isset($seenEarthquakeTimes[(string) $candidate['earthquake_time']])) {
-            $this->logger->info('Skipped earthquake event.', $this->logContext($candidate, [
-                'reason' => 'duplicate_earthquake_time_in_current_batch',
-            ]));
             return;
         }
 
