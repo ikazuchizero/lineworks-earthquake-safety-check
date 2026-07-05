@@ -175,6 +175,36 @@ function earthquakeEvent(string $id = 'event-1'): array
     ];
 }
 
+/** @return array<string, mixed> */
+function unknownEarthquakeEvent(string $id = 'unknown-event-1', string $time = '2026-07-05T12:00:00'): array
+{
+    return [
+        'id' => $id,
+        'earthquake' => [
+            'time' => $time,
+            'maxScale' => 45,
+            'hypocenter' => [
+                'name' => '',
+            ],
+        ],
+    ];
+}
+
+/** @return array<string, mixed> */
+function namedEarthquakeEvent(string $id = 'named-event-1', string $time = '2026-07-05T12:00:00', string $name = 'Named Hypocenter'): array
+{
+    return [
+        'id' => $id,
+        'earthquake' => [
+            'time' => $time,
+            'maxScale' => 45,
+            'hypocenter' => [
+                'name' => $name,
+            ],
+        ],
+    ];
+}
+
 /** @param array<int, array<string, mixed>>|null $events */
 function buildChecker(string $dir, FakeLineWorksClient $lineWorks, ?array $events = null): EarthquakeChecker
 {
@@ -207,20 +237,40 @@ function readState(string $dir): array
     return $state;
 }
 
-function writeAvailableForms(string $dir): void
+function writeState(string $dir, array $state): void
 {
+    file_put_contents($dir . '/state.json', json_encode($state, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT) . PHP_EOL);
+}
+
+function writeAvailableForms(string $dir, int $count = 1): void
+{
+    $forms = [];
+    for ($i = 1; $i <= $count; $i++) {
+        $forms[] = [
+            'url' => 'https://example.invalid/form/' . $i,
+            'status' => 'available',
+            'imported_at' => gmdate('c'),
+            'used_at' => null,
+            'dedupe_key' => null,
+        ];
+    }
+
     file_put_contents($dir . '/forms.json', json_encode([
-        'forms' => [
-            [
-                'url' => 'https://example.invalid/form',
-                'status' => 'available',
-                'imported_at' => gmdate('c'),
-                'used_at' => null,
-                'dedupe_key' => null,
-            ],
-        ],
+        'forms' => $forms,
         'low_stock_notified' => false,
     ], JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT) . PHP_EOL);
+}
+
+function mainMessageCount(FakeLineWorksClient $lineWorks): int
+{
+    $count = 0;
+    foreach ($lineWorks->messages as $message) {
+        if ($message['room_id'] === null) {
+            $count++;
+        }
+    }
+
+    return $count;
 }
 
 function testStockOutNoticeSuccessIsNotRepeated(): void
@@ -304,6 +354,102 @@ function testStockOutSkippedEventIsNotSentAfterFormsAreReplenished(): void
     }
 }
 
+function testUnknownHypocenterInitialPending(): void
+{
+    $dir = tempDir();
+    writeAvailableForms($dir);
+    $lineWorks = new FakeLineWorksClient();
+
+    buildChecker($dir, $lineWorks, [unknownEarthquakeEvent()])->run();
+
+    assertTrue(mainMessageCount($lineWorks) === 0, 'initial UNKNOWN hypocenter must not send the main safety message.');
+    $state = readState($dir);
+    assertTrue(isset($state['pending_unknown_by_earthquake_time']['2026-07-05T12:00:00']), 'initial UNKNOWN hypocenter must be stored as pending.');
+    assertTrue($state['notified'] === [], 'initial UNKNOWN hypocenter must not be marked as notified.');
+}
+
+function testUnknownHypocenterFallbackAfterHold(): void
+{
+    $dir = tempDir();
+    writeAvailableForms($dir, 2);
+    $lineWorks = new FakeLineWorksClient();
+
+    buildChecker($dir, $lineWorks, [unknownEarthquakeEvent()])->run();
+    $state = readState($dir);
+    $state['pending_unknown_by_earthquake_time']['2026-07-05T12:00:00']['first_seen_at'] = gmdate('c', time() - 601);
+    writeState($dir, $state);
+
+    buildChecker($dir, $lineWorks, [unknownEarthquakeEvent()])->run();
+    assertTrue(mainMessageCount($lineWorks) === 1, 'expired UNKNOWN pending must send one fallback main safety message.');
+
+    $state = readState($dir);
+    assertTrue($state['notified'] !== [], 'expired UNKNOWN fallback must be marked as notified.');
+    assertTrue(!isset($state['pending_unknown_by_earthquake_time']['2026-07-05T12:00:00']), 'expired UNKNOWN fallback must clear pending state after notification.');
+
+    buildChecker($dir, $lineWorks, [unknownEarthquakeEvent()])->run();
+    assertTrue(mainMessageCount($lineWorks) === 1, 'notified UNKNOWN fallback must not be sent again.');
+}
+
+function testNamedHypocenterReplacesPendingUnknown(): void
+{
+    $dir = tempDir();
+    writeAvailableForms($dir, 2);
+    $lineWorks = new FakeLineWorksClient();
+
+    buildChecker($dir, $lineWorks, [unknownEarthquakeEvent('unknown-event-1', '2026-07-05T12:30:00')])->run();
+    buildChecker($dir, $lineWorks, [namedEarthquakeEvent('named-event-1', '2026-07-05T12:30:00', 'Named Hypocenter')])->run();
+
+    assertTrue(mainMessageCount($lineWorks) === 1, 'named hypocenter continuation must send exactly one main safety message.');
+    assertTrue(str_contains($lineWorks->messages[0]['text'], 'Named Hypocenter'), 'named hypocenter continuation must use the named hypocenter candidate.');
+    assertTrue(!str_contains($lineWorks->messages[0]['text'], 'UNKNOWN'), 'named hypocenter continuation must not send the UNKNOWN candidate.');
+}
+
+function testNotifiedEarthquakeIsNotRepeated(): void
+{
+    $dir = tempDir();
+    writeAvailableForms($dir, 2);
+    $lineWorks = new FakeLineWorksClient();
+
+    buildChecker($dir, $lineWorks, [namedEarthquakeEvent()])->run();
+    assertTrue(mainMessageCount($lineWorks) === 1, 'first named earthquake must send one main safety message.');
+
+    buildChecker($dir, $lineWorks, [namedEarthquakeEvent()])->run();
+    assertTrue(mainMessageCount($lineWorks) === 1, 'notified earthquake must not be sent again.');
+}
+
+function testInvalidStateJsonStops(): void
+{
+    $dir = tempDir();
+    writeAvailableForms($dir);
+    file_put_contents($dir . '/state.json', '{invalid json');
+    $lineWorks = new FakeLineWorksClient();
+
+    try {
+        buildChecker($dir, $lineWorks, [namedEarthquakeEvent()])->run();
+    } catch (RuntimeException) {
+        assertTrue(mainMessageCount($lineWorks) === 0, 'invalid state.json must stop before sending the main safety message.');
+        return;
+    }
+
+    throw new RuntimeException('invalid state.json must not be treated as an empty state.');
+}
+
+function testInvalidFormsJsonStops(): void
+{
+    $dir = tempDir();
+    file_put_contents($dir . '/forms.json', '{invalid json');
+    $lineWorks = new FakeLineWorksClient();
+
+    try {
+        buildChecker($dir, $lineWorks, [namedEarthquakeEvent()])->run();
+    } catch (RuntimeException) {
+        assertTrue(count($lineWorks->messages) === 0, 'invalid forms.json must stop before any LINE WORKS message.');
+        return;
+    }
+
+    throw new RuntimeException('invalid forms.json must not be treated as empty stock.');
+}
+
 $tests = [
     'notify_scale validation' => 'testNotifyScaleValidation',
     'placeholder validation' => 'testPlaceholderValidation',
@@ -312,6 +458,12 @@ $tests = [
     'stock out notice failure is retried without body notification' => 'testStockOutNoticeFailureIsRetriedWithoutBodyNotification',
     'stock out notice failure is retried after event disappears' => 'testStockOutNoticeFailureIsRetriedAfterEventDisappears',
     'stock out skipped event is not sent after forms are replenished' => 'testStockOutSkippedEventIsNotSentAfterFormsAreReplenished',
+    'UNKNOWN hypocenter initial pending' => 'testUnknownHypocenterInitialPending',
+    'UNKNOWN hypocenter fallback after hold' => 'testUnknownHypocenterFallbackAfterHold',
+    'named hypocenter replaces pending UNKNOWN' => 'testNamedHypocenterReplacesPendingUnknown',
+    'notified earthquake is not repeated' => 'testNotifiedEarthquakeIsNotRepeated',
+    'invalid state JSON stops' => 'testInvalidStateJsonStops',
+    'invalid forms JSON stops' => 'testInvalidFormsJsonStops',
 ];
 
 foreach ($tests as $name => $test) {
