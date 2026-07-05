@@ -43,6 +43,49 @@ final class StateStore
         return isset($state['skipped_due_to_form_stock_out_by_earthquake_time'][$earthquakeTime]);
     }
 
+    /** @return array<string, mixed>|null */
+    public function skippedDueToFormStockOutRecord(string $dedupeKey, string $earthquakeTime): ?array
+    {
+        $state = $this->load();
+
+        $record = $state['skipped_due_to_form_stock_out'][$dedupeKey] ?? null;
+        if (is_array($record)) {
+            return $record;
+        }
+
+        $index = $state['skipped_due_to_form_stock_out_by_earthquake_time'][$earthquakeTime] ?? null;
+        if (!is_array($index)) {
+            return null;
+        }
+
+        $indexedDedupeKey = (string) ($index['dedupe_key'] ?? '');
+        $record = $state['skipped_due_to_form_stock_out'][$indexedDedupeKey] ?? null;
+
+        return is_array($record) ? $record : null;
+    }
+
+    /** @return array<string, array<string, mixed>> */
+    public function stockOutNoticeRetryRecords(): array
+    {
+        $state = $this->load();
+        $records = [];
+
+        foreach ($state['skipped_due_to_form_stock_out'] as $dedupeKey => $record) {
+            if (!is_string($dedupeKey) || !is_array($record)) {
+                continue;
+            }
+
+            $noticeStatus = (string) ($record['notice_status'] ?? 'sent');
+            if ($noticeStatus !== 'pending' && $noticeStatus !== 'failed') {
+                continue;
+            }
+
+            $records[$dedupeKey] = $record;
+        }
+
+        return $records;
+    }
+
     /** @param array<string, mixed> $record */
     public function markNotified(string $dedupeKey, array $record): void
     {
@@ -76,7 +119,41 @@ final class StateStore
                 'dedupe_key' => $dedupeKey,
                 'skipped_at' => (string) ($record['skipped_at'] ?? ''),
                 'reason' => (string) ($record['reason'] ?? 'form_stock_out'),
+                'notice_status' => (string) ($record['notice_status'] ?? 'pending'),
+                'notice_last_attempted_at' => $record['notice_last_attempted_at'] ?? null,
+                'notice_sent_at' => $record['notice_sent_at'] ?? null,
             ];
+        }
+    }
+
+    public function markStockOutNoticeResult(string $dedupeKey, string $status, ?string $error = null): void
+    {
+        $this->load();
+
+        if (!isset($this->state['skipped_due_to_form_stock_out'][$dedupeKey]) || !is_array($this->state['skipped_due_to_form_stock_out'][$dedupeKey])) {
+            throw new RuntimeException('Stock out skipped record not found.');
+        }
+
+        $now = gmdate('c');
+        $record = &$this->state['skipped_due_to_form_stock_out'][$dedupeKey];
+        $record['notice_status'] = $status;
+        $record['notice_last_attempted_at'] = $now;
+
+        if ($status === 'sent') {
+            $record['notice_sent_at'] = $now;
+            $record['notice_error'] = null;
+        } elseif ($status === 'failed') {
+            $record['notice_error'] = $error;
+            if (!array_key_exists('notice_sent_at', $record)) {
+                $record['notice_sent_at'] = null;
+            }
+        }
+
+        $earthquakeTime = trim((string) ($record['earthquake_time'] ?? ''));
+        if ($earthquakeTime !== '' && isset($this->state['skipped_due_to_form_stock_out_by_earthquake_time'][$earthquakeTime])) {
+            $this->state['skipped_due_to_form_stock_out_by_earthquake_time'][$earthquakeTime]['notice_status'] = $status;
+            $this->state['skipped_due_to_form_stock_out_by_earthquake_time'][$earthquakeTime]['notice_last_attempted_at'] = $now;
+            $this->state['skipped_due_to_form_stock_out_by_earthquake_time'][$earthquakeTime]['notice_sent_at'] = $record['notice_sent_at'] ?? null;
         }
     }
 

@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-final class LineWorksClient
+class LineWorksClient
 {
     // LINE WORKS APIとの通信だけを担当するクラス。
     // 呼び出し側は「送れたか/失敗したか」だけを見て、stateやフォーム消費の確定判断を行う。
@@ -182,12 +182,13 @@ final class LineWorksClient
     {
         // file_get_contents のHTTPヘッダーから 200/400 などを取り出す。
         // ここが壊れると成功レスポンスも失敗扱いになるため、正規表現を安易に変えない。
+        $statusCode = 0;
         foreach ($headers as $header) {
             if (preg_match('#^HTTP/\S+\s+(\d{3})#', $header, $matches)) {
-                return (int) $matches[1];
+                $statusCode = (int) $matches[1];
             }
         }
 
-        return 0;
+        return $statusCode;
     }
 }

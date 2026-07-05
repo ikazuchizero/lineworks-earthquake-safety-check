@@ -16,6 +16,8 @@ php php/bin/check.php
 
 本番では `form_stock_enabled=true` を推奨します。`forms.json` の `available` フォームURLを1件ずつ使い、LINE WORKS送信成功後にだけ `used` にします。フォーム枯渇通知と低在庫通知もこのモードで動きます。
 
+`form_stock_enabled` が未設定の場合も `true` 扱いです。PHP版の本番運用はフォームストック必須です。既存の `config.php` を使い回す場合は、`form_stock_path`、`form_import_csv_path`、`form_import_processed_dir`、`form_import_failed_dir`、`form_low_stock_threshold`、`form_low_stock_room_id` を追加してください。固定 `form_url` へ自動fallbackはしません。
+
 ローカル/テストで毎回フォームURLを大量に作るのが難しい場合だけ、`form_stock_enabled=false` にできます。この場合は `forms.json` / `forms.csv` を使わず、`config.php` の `form_url` を固定フォームURLとして送信します。フォームは `used` にならず、低在庫通知・枯渇通知も送りません。
 
 `form_stock_enabled=false` は本番のフォーム再利用を許すための機能ではありません。本番で使うと同じフォームURLに複数地震の回答が混ざるため、原則として本番では `true` に戻してください。`false` で `form_url` が空の場合は、安全のため起動時にエラー停止します。
@@ -49,6 +51,8 @@ https://example.com/form/002
 ```
 
 取り込みに成功したCSVは `php/forms/processed/` に日時付きで移動します。取り込みに失敗したCSVは `php/forms/failed/` に移動します。URL本文はログに出さず、件数だけを確認します。
+
+サーバーへCSVをアップロードする場合は、最初から `forms.csv` という名前で転送せず、一時ファイル名でアップロードしてから最後に `forms.csv` へリネームしてください。転送途中のCSVをcronが読み始める事故を避けるためです。
 
 `php/bin/check.php` はCSV取り込み専用コマンドではありません。CSVを取り込んだ後、そのままP2PQuake API取得、通知対象判定、LINE WORKS送信、state/form更新まで進みます。補充CSVを置いた状態で手動実行すると、条件に合う地震があれば実通知まで進む点に注意してください。
 
@@ -87,6 +91,7 @@ PHP版では原則として `earthquake.time|hypocenter.name` を重複判定キ
 - `php/config.php` が配置されている。
 - `php/secrets/private.key` が配置されている。
 - `notify_scale` が本番条件、通常は震度5弱相当の45以上になっている。テスト用の0のままにしない。
+- 検証で `notify_scale=0` を使う場合はテスト専用です。本番相当では45以上を想定してください。設定値は `0, 10, 20, 30, 40, 45, 50, 55, 60, 70` のみ有効です。
 - Botが安否確認通知先ルームに参加している。
 - Botが補充通知先ルームに参加している。
 - `form_low_stock_room_id` が安否確認通知先とは別の補充通知先になっている。
@@ -116,7 +121,21 @@ PHP版では原則として `earthquake.time|hypocenter.name` を重複判定キ
 - `form_stock_empty_idle_reminder_sent`: 対象地震がない平時にフォーム在庫0件を知らせる保守リマインドです。対象地震ありの枯渇通知とは別扱いで、最短6時間に1回だけ送ります。
 - `form_low_stock_notice_sent`: 地震通知でフォームURLを1件以上消費した実行の最後に、残数が閾値以下だったため低在庫通知を送れたことを示します。
 
+フォーム枯渇で送れなかった地震は `state.json` の `skipped_due_to_form_stock_out` に残ります。`notice_status` が `sent` なら補充通知先への管理通知は送信済みです。`failed` または `pending` の場合、P2PQuakeの次回取得結果から対象地震が消えていても、state上の未達レコードから管理通知だけを再試行します。再試行されるのは管理通知だけで、フォーム補充後も安否確認本体をbotから後追い自動送信しません。
+
+`State or form save failed after LINE WORKS send succeeded.` が出た場合、LINE WORKSへの送信自体は成功した後に `forms.json` または `state.json` の保存で失敗しています。完全なトランザクションではないため、二重通知やフォーム消費状態の不整合が起きていないか、`earthquake_time`、`dedupe_key`、`form_index` を見て手動確認してください。ログには実フォームURLは出しません。
+
 ログや運用メモには、実フォームURL、room_id、bot_id、token、secret、秘密鍵、Authorization header、APIレスポンス全文を書かないでください。外部共有が必要な場合は、先にこれらが含まれていないことを確認してください。
+
+## テスト
+
+外部APIへ実送信しない最小テストは次で実行します。
+
+```powershell
+php php/tests/run.php
+```
+
+このテストは設定検証、HTTPステータス判定、フォーム枯渇時の管理通知再試行など、PHP版の事故りやすい分岐だけを確認します。実 `config.php`、実秘密鍵、実フォームURL、LINE WORKS APIは使いません。
 
 ## 絶対にGitへ入れないもの
 

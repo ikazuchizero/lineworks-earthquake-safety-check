@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-final class P2PQuakeClient
+class P2PQuakeClient
 {
     // P2PQuake APIから地震情報を取得するだけのクラス。
     // 通知判定や重複判定はEarthquakeChecker側で行い、ここではレスポンスを大きく加工しない。
@@ -121,12 +121,13 @@ final class P2PQuakeClient
     {
         // HTTP/1.1 200 OK のようなステータス行から3桁コードを取り出す。
         // 取得失敗は例外にして、古いstateやフォーム状態を不用意に更新しない。
+        $statusCode = 0;
         foreach ($headers as $header) {
             if (preg_match('#^HTTP/\S+\s+(\d{3})#', $header, $matches)) {
-                return (int) $matches[1];
+                $statusCode = (int) $matches[1];
             }
         }
 
-        return 0;
+        return $statusCode;
     }
 }

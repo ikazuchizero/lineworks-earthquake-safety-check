@@ -18,8 +18,8 @@ final class EarthquakeChecker
     // 次回以降にフォームを消費した場合は再通知できるようにしている。
     private bool $lowStockNotifiedThisRun = false;
 
-    // フォーム枯渇通知も1回の実行につき最大1回にする。
-    // 複数の通知対象地震があっても、枯渇後に補充通知先へ連投しないため。
+    // 対象地震ありのフォーム枯渇管理通知を送った実行では、低在庫通知や平時リマインドを重ねない。
+    // 枯渇管理通知そのものの再試行・重複抑制は、stateの notice_status で対象地震ごとに管理する。
     private bool $stockOutNotifiedThisRun = false;
     private bool $skippedStockOutTargetThisRun = false;
 
@@ -68,6 +68,7 @@ final class EarthquakeChecker
         // notify_scale は通知対象にする最小震度コード。
         // 0 はテスト用。本番では通常、震度5弱相当の45以上へ戻す必要がある。
         $targets = $this->selectNotificationTargets($events);
+        $this->retryUndeliveredStockOutNotices();
 
         if ($targets === []) {
             $this->notifyStockOutReminderIfNeeded();
@@ -128,6 +129,9 @@ final class EarthquakeChecker
                     'max_scale' => $target['max_scale'],
                     'notified_at' => $notifiedAt,
                 ];
+                if ($this->config->formStockEnabled()) {
+                    $record['form_index'] = $form['index'];
+                }
 
                 $this->stateStore->markNotified($target['dedupe_key'], $record);
                 $this->stateStore->markNotifiedByEarthquakeTime((string) $target['earthquake_time'], [
@@ -143,9 +147,14 @@ final class EarthquakeChecker
                 }
                 $this->logger->info('notification_completed', $completionContext);
             } catch (Throwable $e) {
-                $this->logger->error('State or form save failed after LINE WORKS send succeeded.', $this->logContext($target, [
-                    'error' => $e->getMessage(),
-                ]));
+                $failureContext = [
+                    'error' => $this->safeErrorSummary($e),
+                ];
+                if ($this->config->formStockEnabled()) {
+                    $failureContext['form_index'] = $form['index'];
+                }
+
+                $this->logger->error('State or form save failed after LINE WORKS send succeeded.', $this->logContext($target, $failureContext));
                 throw $e;
             }
 
@@ -265,6 +274,10 @@ final class EarthquakeChecker
             'max_scale' => $target['max_scale'],
             'skipped_at' => $skippedAt,
             'reason' => 'form_stock_out',
+            'notice_status' => 'pending',
+            'notice_last_attempted_at' => null,
+            'notice_sent_at' => null,
+            'notice_error' => null,
         ];
 
         $this->stateStore->markSkippedDueToFormStockOut($target['dedupe_key'], $record);
@@ -276,27 +289,96 @@ final class EarthquakeChecker
     }
 
     /** @param array<string, mixed> $target */
-    private function notifyStockOutForTarget(array $target): void
+    private function notifyStockOutForTarget(array $target, ?string $noticeDedupeKey = null): void
     {
         // 対象地震を自動送信できなかったことを知らせる通知。
         // stateへ先に skipped を保存しているため、同じ地震でcronが再実行されても繰り返し送らない。
         // このフラグは、同じ実行の最後に低在庫通知を重ねないためだけに使う。
         // 枯渇通知自体は、新規に stock out skip した対象地震ごとに送る。
         $this->stockOutNotifiedThisRun = true;
+        $noticeDedupeKey ??= (string) $target['dedupe_key'];
 
         try {
             $this->notifyMaintenance(
                 '安否確認フォームURLが枯渇しているため、対象地震の安否確認通知を自動送信できませんでした。今回対象となった地震についてはbotからの自動再送は行いません。必要に応じて手動で安否確認を送信し、フォームURLを補充してください。'
             );
+            $this->stateStore->markStockOutNoticeResult($noticeDedupeKey, 'sent');
+            $this->stateStore->save();
             $this->logger->info('form_stock_out_notice_sent', $this->logContext($target, [
                 'available_count' => 0,
             ]));
         } catch (Throwable $e) {
+            try {
+                $this->stateStore->markStockOutNoticeResult($noticeDedupeKey, 'failed', $this->safeErrorSummary($e));
+                $this->stateStore->save();
+            } catch (Throwable $stateError) {
+                $this->logger->error('form_stock_out_notice_status_save_failed', $this->logContext($target, [
+                    'error' => $this->safeErrorSummary($stateError),
+                ]));
+            }
+
             $this->logger->error('form_stock_out_notice_failed', $this->logContext($target, [
                 'available_count' => 0,
-                'error' => $e->getMessage(),
+                'error' => $this->safeErrorSummary($e),
             ]));
         }
+    }
+
+    private function retryUndeliveredStockOutNotices(): void
+    {
+        if (!$this->config->formStockEnabled()) {
+            return;
+        }
+
+        foreach ($this->stateStore->stockOutNoticeRetryRecords() as $dedupeKey => $record) {
+            $target = $this->targetFromStockOutRecord($dedupeKey, $record);
+
+            if ($target === null) {
+                $this->logger->error('Stock out skipped record is invalid.', [
+                    'dedupe_key' => $dedupeKey,
+                    'reason' => 'invalid_stock_out_skipped_record',
+                ]);
+                continue;
+            }
+
+            $this->skippedStockOutTargetThisRun = true;
+            $this->logger->info('form_stock_out_notice_retrying', $this->logContext($target, [
+                'notice_status' => (string) ($record['notice_status'] ?? 'pending'),
+            ]));
+            $this->notifyStockOutForTarget($target, $dedupeKey);
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $record
+     * @return array<string, mixed>|null
+     */
+    private function targetFromStockOutRecord(string $dedupeKey, array $record): ?array
+    {
+        $earthquakeTime = trim((string) ($record['earthquake_time'] ?? ''));
+
+        if ($earthquakeTime === '') {
+            return null;
+        }
+
+        $hypocenterName = trim((string) ($record['hypocenter_name'] ?? ''));
+        if ($hypocenterName === '') {
+            $hypocenterName = 'UNKNOWN';
+        }
+
+        $recordDedupeKey = trim((string) ($record['dedupe_key'] ?? $dedupeKey));
+        if ($recordDedupeKey === '') {
+            $recordDedupeKey = $earthquakeTime . '|' . $hypocenterName;
+        }
+
+        return [
+            'event' => null,
+            'event_id' => $record['event_id'] ?? null,
+            'earthquake_time' => $earthquakeTime,
+            'hypocenter_name' => $hypocenterName,
+            'max_scale' => (int) ($record['max_scale'] ?? 0),
+            'dedupe_key' => $recordDedupeKey,
+        ];
     }
 
     private function notifyStockOutReminderIfNeeded(): void
@@ -719,5 +801,12 @@ TEXT;
             'max_scale' => $target['max_scale'],
             'dedupe_key' => $target['dedupe_key'],
         ], $extra);
+    }
+
+    private function safeErrorSummary(Throwable $e): string
+    {
+        $message = preg_replace('/\s+/', ' ', $e->getMessage()) ?? '';
+
+        return substr($message, 0, 200);
     }
 }

@@ -82,7 +82,8 @@ final class Config
     public function formStockEnabled(): bool
     {
         // 未設定時は true 扱いにする。
-        // 既存の実 config.php に新項目がなくても、従来のフォームストック運用を壊さないため。
+        // PHP版の本番運用はフォームストック前提。固定form_urlへの暗黙fallbackは再利用事故につながるため行わない。
+        // 既存の実 config.php には、フォームストック関連設定を追加してから利用すること。
         if (!array_key_exists('form_stock_enabled', $this->values)) {
             return true;
         }
@@ -136,7 +137,7 @@ final class Config
     {
         // 起動時に設定不備を止める。
         // 送信途中で不足に気づくと、通知漏れやフォーム消費だけが起きる事故につながる。
-        $this->requireNumeric('notify_scale');
+        $this->requireNotifyScale();
         $this->requireIntegerIfPresent('unknown_hypocenter_hold_seconds');
         $this->requireBooleanIfPresent('form_stock_enabled');
 
@@ -169,10 +170,10 @@ final class Config
             if ($this->formLowStockThreshold() < 1) {
                 throw new RuntimeException('Config value must be greater than 0: form_low_stock_threshold');
             }
-        } elseif (trim($this->formUrl()) === '') {
+        } else {
             // form_stock_enabled=false はテスト用の固定URLモード。
-            // form_url が空のまま送ると利用者に無効な安否確認を出すため、起動時に止める。
-            throw new RuntimeException('Missing required config value when form stock is disabled: form_url');
+            // form_url が空、またはプレースホルダーのまま送ると利用者に無効な安否確認を出すため、起動時に止める。
+            $this->requireNonEmptyString('form_url');
         }
 
         if ($this->unknownHypocenterHoldSeconds() <= 0) {
@@ -189,12 +190,27 @@ final class Config
         if (!array_key_exists($key, $this->values) || trim((string) $this->values[$key]) === '') {
             throw new RuntimeException('Missing required config value: ' . $key);
         }
+
+        if (str_starts_with(trim((string) $this->values[$key]), 'REPLACE_WITH_')) {
+            throw new RuntimeException('Config placeholder must be replaced: ' . $key);
+        }
     }
 
     private function requireNumeric(string $key): void
     {
         if (!array_key_exists($key, $this->values) || !is_numeric($this->values[$key])) {
             throw new RuntimeException('Config value must be numeric: ' . $key);
+        }
+    }
+
+    private function requireNotifyScale(): void
+    {
+        $this->requireNumeric('notify_scale');
+        $this->requireIntegerIfPresent('notify_scale');
+
+        $allowedScales = [0, 10, 20, 30, 40, 45, 50, 55, 60, 70];
+        if (!in_array((int) $this->values['notify_scale'], $allowedScales, true)) {
+            throw new RuntimeException('Config value is not an allowed seismic intensity code: notify_scale');
         }
     }
 
