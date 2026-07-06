@@ -8,6 +8,11 @@ require_once __DIR__ . '/../src/FormStockStore.php';
 require_once __DIR__ . '/../src/P2PQuakeClient.php';
 require_once __DIR__ . '/../src/LineWorksClient.php';
 require_once __DIR__ . '/../src/EarthquakeChecker.php';
+require_once __DIR__ . '/../src/SetupChecker.php';
+require_once __DIR__ . '/../src/ConnectivityChecker.php';
+require_once __DIR__ . '/../src/ErrorNotificationStore.php';
+require_once __DIR__ . '/../src/FailureNotifier.php';
+require_once __DIR__ . '/../src/HealthChecker.php';
 
 final class FakeP2PQuakeClient extends P2PQuakeClient
 {
@@ -94,6 +99,20 @@ function writeConfig(string $dir, array $overrides = []): string
     file_put_contents($path, '<?php return ' . var_export($config, true) . ';' . PHP_EOL);
 
     return $path;
+}
+
+function createRuntimeDirs(string $dir): void
+{
+    foreach ([
+        $dir . '/storage',
+        $dir . '/forms',
+        $dir . '/processed',
+        $dir . '/failed',
+    ] as $path) {
+        if (!is_dir($path) && !mkdir($path, 0775, true)) {
+            throw new RuntimeException('Failed to create runtime test directory.');
+        }
+    }
 }
 
 function loadConfigForTest(array $overrides = []): Config
@@ -450,6 +469,134 @@ function testInvalidFormsJsonStops(): void
     throw new RuntimeException('invalid forms.json must not be treated as empty stock.');
 }
 
+function testSetupCheckerSuccess(): void
+{
+    $dir = tempDir();
+    createRuntimeDirs($dir);
+    writeConfig($dir);
+
+    $checker = new SetupChecker($dir);
+    $results = $checker->run();
+
+    assertTrue($checker->isOk($results), 'setup checker must pass when required files and directories exist.');
+}
+
+function testSetupCheckerMissingConfig(): void
+{
+    $dir = tempDir();
+    createRuntimeDirs($dir);
+
+    $checker = new SetupChecker($dir);
+    $results = $checker->run();
+
+    assertTrue(!$checker->isOk($results), 'setup checker must fail when config.php is missing.');
+    assertTrue(($results[0]['status'] ?? null) === 'NG', 'missing config.php must be reported as NG.');
+}
+
+function testSetupCheckerMissingDirectory(): void
+{
+    $dir = tempDir();
+    writeConfig($dir);
+    mkdir($dir . '/storage', 0775, true);
+
+    $checker = new SetupChecker($dir);
+    $results = $checker->run();
+    $byName = [];
+    foreach ($results as $result) {
+        $byName[$result['name']] = $result;
+    }
+
+    assertTrue(($byName['forms_dir']['status'] ?? null) === 'NG', 'setup checker must fail when forms directory is missing.');
+}
+
+function testSetupCheckerNotWritableDirectory(): void
+{
+    $dir = tempDir();
+    createRuntimeDirs($dir);
+    writeConfig($dir);
+    chmod($dir . '/storage', 0555);
+    clearstatcache(true, $dir . '/storage');
+
+    if (is_writable($dir . '/storage')) {
+        chmod($dir . '/storage', 0775);
+        return;
+    }
+
+    $checker = new SetupChecker($dir);
+    $results = $checker->run();
+    chmod($dir . '/storage', 0775);
+
+    $byName = [];
+    foreach ($results as $result) {
+        $byName[$result['name']] = $result;
+    }
+
+    assertTrue(($byName['storage_dir']['reason'] ?? null) === 'not_writable', 'setup checker must detect not writable storage directory when the OS enforces permissions.');
+}
+
+function testConnectivityCheckerUsesShortTestMessage(): void
+{
+    $lineWorks = new FakeLineWorksClient();
+    $checker = new ConnectivityChecker($lineWorks, 'maintenance-room-id');
+
+    $checker->run();
+
+    assertTrue(count($lineWorks->messages) === 1, 'connectivity checker must send one test message.');
+    assertTrue($lineWorks->messages[0]['room_id'] === 'maintenance-room-id', 'connectivity checker must use the configured maintenance room.');
+    assertTrue(!str_contains($lineWorks->messages[0]['text'], '【地震情報】'), 'connectivity checker must not send the earthquake safety message body.');
+}
+
+function testFailureNotifierSuppressesRepeatedError(): void
+{
+    $dir = tempDir();
+    $lineWorks = new FakeLineWorksClient();
+    $notifier = new FailureNotifier(
+        $lineWorks,
+        new ErrorNotificationStore($dir . '/error_notifications.json'),
+        'maintenance-room-id'
+    );
+
+    $error = new RuntimeException('same failure');
+    assertTrue($notifier->notify($error, 'check_failed') === true, 'first failure notification must be sent.');
+    assertTrue($notifier->notify($error, 'check_failed') === false, 'same failure notification must be suppressed.');
+    assertTrue(count($lineWorks->messages) === 1, 'same failure must not be sent repeatedly.');
+}
+
+function testFailureNotifierSkipsLineWorksError(): void
+{
+    $dir = tempDir();
+    $lineWorks = new FakeLineWorksClient();
+    $notifier = new FailureNotifier(
+        $lineWorks,
+        new ErrorNotificationStore($dir . '/error_notifications.json'),
+        'maintenance-room-id'
+    );
+
+    assertTrue($notifier->notify(new RuntimeException('LINE WORKS message send failed.'), 'check_failed') === false, 'LINE WORKS failures must not trigger recursive LINE WORKS notifications.');
+    assertTrue(count($lineWorks->messages) === 0, 'LINE WORKS failure notification must be skipped.');
+}
+
+function testHealthCheckerSummarizesLog(): void
+{
+    $dir = tempDir();
+    $now = date('c');
+    file_put_contents($dir . '/app.log', implode(PHP_EOL, [
+        '[' . $now . '] INFO check_completed',
+        '[' . $now . '] INFO form_low_stock_notice_sent {"available_count":1}',
+        '[' . $now . '] ERROR Check failed. {"error":"safe"}',
+    ]) . PHP_EOL);
+
+    $checker = new HealthChecker($dir . '/app.log');
+    $summary = $checker->summarize(7);
+    $message = $checker->message($summary);
+
+    assertTrue($summary['normal_log'] === 1, 'health checker must count normal log lines.');
+    assertTrue($summary['warning'] === 1, 'health checker must count warning-like lines.');
+    assertTrue($summary['error'] === 1, 'health checker must count error lines.');
+    assertTrue(str_contains($message, 'normal_log: 1件'), 'health check message must include normal log count.');
+    assertTrue(str_contains($message, 'error: 1件'), 'health check message must include error count.');
+}
+
 $tests = [
     'notify_scale validation' => 'testNotifyScaleValidation',
     'placeholder validation' => 'testPlaceholderValidation',
@@ -464,6 +611,14 @@ $tests = [
     'notified earthquake is not repeated' => 'testNotifiedEarthquakeIsNotRepeated',
     'invalid state JSON stops' => 'testInvalidStateJsonStops',
     'invalid forms JSON stops' => 'testInvalidFormsJsonStops',
+    'setup checker success' => 'testSetupCheckerSuccess',
+    'setup checker missing config' => 'testSetupCheckerMissingConfig',
+    'setup checker missing directory' => 'testSetupCheckerMissingDirectory',
+    'setup checker not writable directory' => 'testSetupCheckerNotWritableDirectory',
+    'connectivity checker uses short test message' => 'testConnectivityCheckerUsesShortTestMessage',
+    'failure notifier suppresses repeated error' => 'testFailureNotifierSuppressesRepeatedError',
+    'failure notifier skips LINE WORKS error' => 'testFailureNotifierSkipsLineWorksError',
+    'health checker summarizes log' => 'testHealthCheckerSummarizesLog',
 ];
 
 foreach ($tests as $name => $test) {

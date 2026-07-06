@@ -2,6 +2,7 @@
 /php/secrets/private.key
 /php/storage/state.json
 /php/storage/app.log
+/php/storage/error_notifications.json
 /php/storage/*.tmp
 /php/storage/check.lock
 

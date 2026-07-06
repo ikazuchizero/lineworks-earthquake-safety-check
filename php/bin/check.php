@@ -9,6 +9,8 @@ require_once __DIR__ . '/../src/FormStockStore.php';
 require_once __DIR__ . '/../src/P2PQuakeClient.php';
 require_once __DIR__ . '/../src/LineWorksClient.php';
 require_once __DIR__ . '/../src/EarthquakeChecker.php';
+require_once __DIR__ . '/../src/ErrorNotificationStore.php';
+require_once __DIR__ . '/../src/FailureNotifier.php';
 
 // cron / タスクスケジューラから呼ぶPHP版の入口。
 // このファイルでは「準備」だけを行い、地震判定や送信の詳細は各クラスへ委譲する。
@@ -43,6 +45,8 @@ if (!flock($lockHandle, LOCK_EX | LOCK_NB)) {
 }
 
 $exitCode = 0;
+$config = null;
+$lineWorksClient = null;
 
 try {
     // 実設定はGit管理外の config.php から読む。
@@ -70,11 +74,24 @@ try {
     );
 
     $checker->run();
+    $logger->info('check_completed');
 } catch (Throwable $e) {
     // 例外時は exit code 1 で停止する。
     // 送信失敗やstate破損を握りつぶして正常終了すると、運用側が異常に気づけない。
     $exitCode = 1;
     $logger->error('Check failed.', ['error' => $e->getMessage()]);
+    if ($config instanceof Config && $lineWorksClient instanceof LineWorksClient) {
+        try {
+            $failureNotifier = new FailureNotifier(
+                $lineWorksClient,
+                new ErrorNotificationStore($storageDir . '/error_notifications.json'),
+                $config->formStockEnabled() ? $config->formLowStockRoomId() : null
+            );
+            $failureNotifier->notify($e, 'check_failed');
+        } catch (Throwable $notifyError) {
+            $logger->error('Failure notification failed.', ['error' => $notifyError->getMessage()]);
+        }
+    }
     // cronメールや検証環境の標準エラーへ詳細例外を流さない。
     // 詳細はapp.logに集約し、LINE WORKS系の例外は秘匿値を含まない文面にしておく。
     fwrite(STDERR, 'Check failed. See app.log.' . PHP_EOL);
