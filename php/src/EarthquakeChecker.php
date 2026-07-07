@@ -231,6 +231,8 @@ final class EarthquakeChecker
         // forms.csv には実フォームURLが入るため、ログにはURL本文を出さず、取り込み件数・重複件数・不正行件数だけを残す。
         // 取り込み成功時は processed、失敗時は failed へ移動されるため、同じCSVを次回cronで繰り返し処理しない。
         // CSV取り込み失敗は安否確認本体とは別の運用問題なので、保守通知先へ短く知らせる。
+        // 予期しないCSV補充処理の失敗も運用問題として扱い、可能な限り既存のforms.json在庫で地震チェック本体を継続する。
+        // ただしforms.json自体が壊れている場合は、後段の在庫読み込みで安全側に停止する既存設計を維持する。
         try {
             $result = $this->formStockStore->importCsvIfExists();
         } catch (FormImportException $e) {
@@ -243,6 +245,19 @@ final class EarthquakeChecker
             } catch (Throwable $notifyError) {
                 $this->logger->error('Form CSV failure notification failed.', [
                     'error' => $notifyError->getMessage(),
+                ]);
+            }
+            return;
+        } catch (Throwable $e) {
+            $this->logger->error('Form CSV import failed unexpectedly.', [
+                'error' => $this->safeErrorSummary($e),
+            ]);
+
+            try {
+                $this->notifyMaintenance('フォームURL CSVの取り込み処理で予期しないエラーが発生しました。forms.json、processed/failed ディレクトリの配置・権限を確認してください。地震チェック本体は既存のフォーム在庫で継続します。');
+            } catch (Throwable $notifyError) {
+                $this->logger->error('Unexpected form CSV failure notification failed.', [
+                    'error' => $this->safeErrorSummary($notifyError),
                 ]);
             }
             return;

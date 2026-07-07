@@ -172,7 +172,7 @@ final class FormStockStore
         }
 
         try {
-            $header = fgetcsv($handle);
+            $header = fgetcsv($handle, null, ',', '"', '');
             if ($header === false || !isset($header[0]) || strtolower(trim($this->removeUtf8Bom((string) $header[0]))) !== 'url') {
                 throw new FormImportException('Form import CSV header must be URL.');
             }
@@ -182,7 +182,7 @@ final class FormStockStore
             $duplicateSkipped = 0;
             $invalidRows = 0;
 
-            while (($row = fgetcsv($handle)) !== false) {
+            while (($row = fgetcsv($handle, null, ',', '"', '')) !== false) {
                 $url = isset($row[0]) ? trim((string) $row[0]) : '';
 
                 if ($url === '') {
@@ -249,6 +249,10 @@ final class FormStockStore
     {
         // 取り込み後のCSVは削除せず processed/ または failed/ に残す。
         // 非エンジニア運用で「アップロードしたCSVがどうなったか」を追えるようにするため。
+        if (file_exists($directory) && !is_dir($directory)) {
+            throw new RuntimeException('Form import archive path exists but is not a directory.');
+        }
+
         if (!is_dir($directory) && !mkdir($directory, 0775, true)) {
             throw new RuntimeException('Failed to create form import archive directory.');
         }

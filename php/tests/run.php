@@ -423,6 +423,33 @@ function testStockOutNoticeSuccessIsNotRepeated(): void
     assertTrue(count($lineWorks->messages) === 1, 'sent stock out notice must not be repeated.');
 }
 
+function testFormCsvUnexpectedFailureDoesNotStopEarthquakeCheck(): void
+{
+    // 前提: forms.csv は置かれているが、processed 移動先がファイルになっていてCSVアーカイブに失敗する状態です。
+    // 操作: 既存forms.jsonにはavailableフォームを残したまま、通常なら通知対象になる地震を処理します。
+    // 期待: CSV取り込みの予期しない失敗ではrun()を止めず、既存フォーム在庫で安否確認本文を1件送ります。
+    // 防ぐ事故: フォーム補充CSVの運用ミスが、地震取得・通知判定の本体処理まで巻き添え停止すること。
+    $dir = tempDir();
+    writeAvailableForms($dir, 20);
+    file_put_contents($dir . '/forms.csv', implode(PHP_EOL, [
+        'URL',
+        'https://example.invalid/imported-form',
+    ]) . PHP_EOL);
+    file_put_contents($dir . '/processed', 'not a directory');
+    $lineWorks = new FakeLineWorksClient();
+
+    buildChecker($dir, $lineWorks, [namedEarthquakeEvent()])->run();
+
+    $maintenanceMessages = array_values(array_filter(
+        $lineWorks->messages,
+        static fn(array $message): bool => $message['room_id'] === 'maintenance-room-id'
+    ));
+
+    assertTrue(mainMessageCount($lineWorks) === 1, 'unexpected form CSV import failure must not stop the main safety message.');
+    assertTrue(count($maintenanceMessages) === 1, 'unexpected form CSV import failure should also notify maintenance once.');
+    assertTrue(str_contains($maintenanceMessages[0]['text'], 'CSV'), 'unexpected form CSV import failure maintenance message must identify CSV import trouble.');
+}
+
 function testStockOutNoticeFailureIsRetriedWithoutBodyNotification(): void
 {
     // 前提: 対象地震はあるがフォーム在庫0件で、さらに保守通知の送信だけが失敗する状態です。
@@ -878,6 +905,7 @@ $tests = [
     'placeholder validation' => 'testPlaceholderValidation',
     'last HTTP status code wins' => 'testLastHttpStatusCodeWins',
     'stock out notice success is not repeated' => 'testStockOutNoticeSuccessIsNotRepeated',
+    'form CSV unexpected failure does not stop earthquake check' => 'testFormCsvUnexpectedFailureDoesNotStopEarthquakeCheck',
     'stock out notice failure is retried without body notification' => 'testStockOutNoticeFailureIsRetriedWithoutBodyNotification',
     'stock out notice failure is retried after event disappears' => 'testStockOutNoticeFailureIsRetriedAfterEventDisappears',
     'stock out skipped event is not sent after forms are replenished' => 'testStockOutSkippedEventIsNotSentAfterFormsAreReplenished',
