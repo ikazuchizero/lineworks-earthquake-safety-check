@@ -20,11 +20,16 @@ php php/bin/check.php
 
 ローカル/テストで毎回フォームURLを大量に作るのが難しい場合だけ、`form_stock_enabled=false` にできます。この場合は `forms.json` / `forms.csv` を使わず、`config.php` の `form_url` を固定フォームURLとして送信します。フォームは `used` にならず、低在庫通知・枯渇通知も送りません。
 
-`form_stock_enabled=false` は本番のフォーム再利用を許すための機能ではありません。本番で使うと同じフォームURLに複数地震の回答が混ざるため、原則として本番では `true` に戻してください。`false` で `form_url` が空の場合は、安全のため起動時にエラー停止します。
+`form_stock_enabled=false` は本番のフォーム再利用を許すための機能ではありません。実運用相当のフォーム在庫運用では `form_stock_enabled=true` を前提にします。`false` で `form_url` が空の場合は、安全のため起動時にエラー停止します。
+
+`form_stock_enabled=false` では `form_low_stock_room_id` を使いません。そのため `php/bin/health_check.php` や `check.php` の失敗通知など、保守系通知を実LINE WORKS向けに動かすと、補充通知先ではなく通常の `room_id` 側へ送られる可能性があります。固定URL検証モードのまま保守系通知を検証する場合は、実利用者がいるルームではなく検証用の安全な `room_id` を使うか、実LINE WORKS向けの疎通確認を避けてください。
 
 ## PHPファイルの役割
 
 - `php/bin/check.php`: cron / タスクスケジューラから呼ぶ入口です。lock取得、設定読み込み、各Store/Client生成、`EarthquakeChecker` 実行を担当します。
+- `php/bin/setup_check.php`: 設定ファイル、秘密鍵ファイル、保存先ディレクトリ、フォーム在庫関連ディレクトリなどの準備状態を確認します。
+- `php/bin/connectivity_check.php`: LINE WORKS API への疎通と、検証用メッセージ送信を確認します。安否確認本文は送りません。
+- `php/bin/health_check.php`: アプリの状態ファイル、フォーム在庫、直近ログなどを確認し、必要に応じて保守通知を送ります。
 - `php/src/Config.php`: `config.php` の読み込みと必須設定の検証を担当します。`form_stock_enabled` の本番/テスト切り替えもここで検証します。
 - `php/src/EarthquakeChecker.php`: 地震取得後の通知対象抽出、重複判定、フォームURL解決、LINE WORKS送信、state/form更新順序を管理します。
 - `php/src/P2PQuakeClient.php`: P2PQuake APIから地震情報を取得します。通知漏れ防止のため、最新1件だけにしない方針です。
@@ -32,6 +37,10 @@ php php/bin/check.php
 - `php/src/StateStore.php`: `state.json` に通知済み `dedupe_key` を保存し、二重通知を防ぎます。
 - `php/src/FormStockStore.php`: `forms.csv` の取り込み、`forms.json` の保存、フォームURLのavailable/used管理を担当します。
 - `php/src/Logger.php`: `app.log` へ運用ログを追記します。外部共有前には秘密値や実URLが含まれていないか確認してください。
+- `php/src/SetupChecker.php`: `setup_check.php` の実体です。秘密値そのものは出さず、存在・読込可否・空でないことを中心に確認します。
+- `php/src/HealthChecker.php`: `health_check.php` の実体です。状態、フォーム在庫、直近ログを点検して保守通知向けの要約を作ります。
+- `php/src/FailureNotifier.php`: `check.php` 実行失敗時の保守通知を担当します。同じ失敗が続く場合の通知過多を抑えます。
+- `php/src/ErrorNotificationStore.php`: 失敗通知の前回状態を保存し、同じ失敗通知を繰り返し送らないために使います。本体の地震通知stateとは別管理です。
 
 ## フォームURL補充手順
 
