@@ -27,7 +27,7 @@ php php/bin/check.php
 ## PHPファイルの役割
 
 - `php/bin/check.php`: cron / タスクスケジューラから呼ぶ入口です。lock取得、設定読み込み、各Store/Client生成、`EarthquakeChecker` 実行を担当します。
-- `php/bin/setup_check.php`: 設定ファイル、秘密鍵ファイル、保存先ディレクトリ、フォーム在庫関連ディレクトリなどの準備状態を確認します。
+- `php/bin/setup_check.php`: 設定ファイル、秘密鍵ファイル、保存先ディレクトリ、フォーム在庫関連ディレクトリ、主要PHPファイルの配置漏れなどの準備状態を確認します。
 - `php/bin/connectivity_check.php`: LINE WORKS API への疎通と、検証用メッセージ送信を確認します。通常の安否確認通知先へ送信し、`form_stock_enabled=true` の場合は保守通知先へも送信します。安否確認本文は送りません。
 - `php/bin/health_check.php`: アプリの状態ファイル、フォーム在庫、直近ログなどを確認し、必要に応じて保守通知を送ります。
 - `php/src/Config.php`: `config.php` の読み込みと必須設定の検証を担当します。`form_stock_enabled` の本番/テスト切り替えもここで検証します。
@@ -37,7 +37,7 @@ php php/bin/check.php
 - `php/src/StateStore.php`: `state.json` に通知済み `dedupe_key` を保存し、二重通知を防ぎます。
 - `php/src/FormStockStore.php`: `forms.csv` の取り込み、`forms.json` の保存、フォームURLのavailable/used管理を担当します。
 - `php/src/Logger.php`: `app.log` へ運用ログを追記します。外部共有前には秘密値や実URLが含まれていないか確認してください。
-- `php/src/SetupChecker.php`: `setup_check.php` の実体です。秘密値そのものは出さず、存在・読込可否・空でないことを中心に確認します。
+- `php/src/SetupChecker.php`: `setup_check.php` の実体です。秘密値そのものは出さず、設定・秘密鍵・保存先ディレクトリ・主要PHPファイルについて、存在・読込可否・空でないことを中心に確認します。
 - `php/src/HealthChecker.php`: `health_check.php` の実体です。状態、フォーム在庫、直近ログを点検して保守通知向けの要約を作ります。
 - `php/src/FailureNotifier.php`: `check.php` 実行失敗時の保守通知を担当します。同じ失敗が続く場合の通知過多を抑えます。
 - `php/src/ErrorNotificationStore.php`: 失敗通知の前回状態を保存し、同じ失敗通知を繰り返し送らないために使います。本体の地震通知stateとは別管理です。

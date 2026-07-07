@@ -20,6 +20,10 @@ final class SetupChecker
         // 実設定値や秘密鍵の中身は表示せず、setup_check.php では OK/NG と原因分類だけを出す。
         $results[] = $this->checkFileReadable('config_file', $configPath);
 
+        foreach ($this->requiredPhpFiles() as $name => $relativePath) {
+            $results[] = $this->checkFileReadable($name, $this->rootDir . '/' . $relativePath, true);
+        }
+
         $config = null;
         try {
             $config = Config::load($configPath);
@@ -52,6 +56,31 @@ final class SetupChecker
         // form_stock_enabled=false は検証用の固定form_urlモード。
         // Config::load() が固定URLの妥当性を検証済みなので、forms系ディレクトリは必須扱いしない。
         return $results;
+    }
+
+    /** @return array<string, string> */
+    private function requiredPhpFiles(): array
+    {
+        // setup_check.php は初回設置後の総合配置確認でもある。
+        // config/secret/storage だけでなく、cron入口や主要クラスのアップロード漏れもここで見つける。
+        // 各ファイルは存在・通常ファイル・読込可・空でないことだけを確認し、PHP構文チェックは別途 php -l で行う。
+        return [
+            'php_bin_check' => 'bin/check.php',
+            'php_bin_setup_check' => 'bin/setup_check.php',
+            'php_bin_connectivity_check' => 'bin/connectivity_check.php',
+            'php_bin_health_check' => 'bin/health_check.php',
+            'php_src_Config' => 'src/Config.php',
+            'php_src_EarthquakeChecker' => 'src/EarthquakeChecker.php',
+            'php_src_LineWorksClient' => 'src/LineWorksClient.php',
+            'php_src_P2PQuakeClient' => 'src/P2PQuakeClient.php',
+            'php_src_StateStore' => 'src/StateStore.php',
+            'php_src_FormStockStore' => 'src/FormStockStore.php',
+            'php_src_SetupChecker' => 'src/SetupChecker.php',
+            'php_src_ConnectivityChecker' => 'src/ConnectivityChecker.php',
+            'php_src_HealthChecker' => 'src/HealthChecker.php',
+            'php_src_FailureNotifier' => 'src/FailureNotifier.php',
+            'php_src_ErrorNotificationStore' => 'src/ErrorNotificationStore.php',
+        ];
     }
 
     /** @param array<int, array{name: string, status: string, reason: string}> $results */

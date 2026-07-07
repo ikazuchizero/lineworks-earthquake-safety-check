@@ -151,6 +151,44 @@ function createRuntimeDirs(string $dir): void
     }
 }
 
+/** @return array<string, string> */
+function requiredPhpFileFixtures(): array
+{
+    // SetupCheckerの「主要PHPファイル配置確認」に合わせたfixture一覧です。
+    // 一時ディレクトリに最低限のダミーファイルを置き、アップロード漏れ・空ファイル検知をテストします。
+    return [
+        'bin/check.php' => '<?php echo "check";' . PHP_EOL,
+        'bin/setup_check.php' => '<?php echo "setup";' . PHP_EOL,
+        'bin/connectivity_check.php' => '<?php echo "connectivity";' . PHP_EOL,
+        'bin/health_check.php' => '<?php echo "health";' . PHP_EOL,
+        'src/Config.php' => '<?php class ConfigFixture {}' . PHP_EOL,
+        'src/EarthquakeChecker.php' => '<?php class EarthquakeCheckerFixture {}' . PHP_EOL,
+        'src/LineWorksClient.php' => '<?php class LineWorksClientFixture {}' . PHP_EOL,
+        'src/P2PQuakeClient.php' => '<?php class P2PQuakeClientFixture {}' . PHP_EOL,
+        'src/StateStore.php' => '<?php class StateStoreFixture {}' . PHP_EOL,
+        'src/FormStockStore.php' => '<?php class FormStockStoreFixture {}' . PHP_EOL,
+        'src/SetupChecker.php' => '<?php class SetupCheckerFixture {}' . PHP_EOL,
+        'src/ConnectivityChecker.php' => '<?php class ConnectivityCheckerFixture {}' . PHP_EOL,
+        'src/HealthChecker.php' => '<?php class HealthCheckerFixture {}' . PHP_EOL,
+        'src/FailureNotifier.php' => '<?php class FailureNotifierFixture {}' . PHP_EOL,
+        'src/ErrorNotificationStore.php' => '<?php class ErrorNotificationStoreFixture {}' . PHP_EOL,
+    ];
+}
+
+/** @param array<string, string> $overrides */
+function createRequiredPhpFiles(string $dir, array $overrides = []): void
+{
+    foreach (array_merge(requiredPhpFileFixtures(), $overrides) as $relativePath => $contents) {
+        $path = $dir . '/' . $relativePath;
+        $parent = dirname($path);
+        if (!is_dir($parent) && !mkdir($parent, 0775, true)) {
+            throw new RuntimeException('Failed to create PHP fixture directory.');
+        }
+
+        file_put_contents($path, $contents);
+    }
+}
+
 function loadConfigForTest(array $overrides = []): Config
 {
     // Config::load()単体の検証用helperです。
@@ -585,11 +623,12 @@ function testInvalidFormsJsonStops(): void
 
 function testSetupCheckerSuccess(): void
 {
-    // 前提: 初回設置に必要なconfig、秘密鍵ダミー、storage/forms系ディレクトリが揃っています。
+    // 前提: 初回設置に必要なconfig、秘密鍵ダミー、主要PHPファイル、storage/forms系ディレクトリが揃っています。
     // 操作: SetupCheckerを一時ディレクトリのルートに対して実行します。
     // 期待: すべてOKとなり、setup_checkとして成功判定できます。
     // 防ぐ事故: 正常構成にもかかわらずsetup_checkが過剰にNGを出し、設置作業を止めること。
     $dir = tempDir();
+    createRequiredPhpFiles($dir);
     createRuntimeDirs($dir);
     writeConfig($dir);
 
@@ -606,6 +645,7 @@ function testSetupCheckerMissingConfig(): void
     // 期待: config.php欠落をNGとして報告します。
     // 防ぐ事故: configなしでcronを動かして、後段で分かりにくい失敗になること。
     $dir = tempDir();
+    createRequiredPhpFiles($dir);
     createRuntimeDirs($dir);
 
     $checker = new SetupChecker($dir);
@@ -622,6 +662,7 @@ function testSetupCheckerMissingDirectory(): void
     // 期待: forms_dirがNGになり、配置漏れとして検出できます。
     // 防ぐ事故: CSV移動先やフォーム在庫置き場がないまま運用し、取り込みや通知時に失敗すること。
     $dir = tempDir();
+    createRequiredPhpFiles($dir);
     writeConfig($dir);
     mkdir($dir . '/storage', 0775, true);
 
@@ -635,6 +676,51 @@ function testSetupCheckerMissingDirectory(): void
     assertTrue(($byName['forms_dir']['status'] ?? null) === 'NG', 'setup checker must fail when forms directory is missing.');
 }
 
+function testSetupCheckerMissingPhpFile(): void
+{
+    // 前提: configやディレクトリは揃っているが、主要PHPファイルの1つだけが欠落しています。
+    // 操作: bin/check.phpを置かずにSetupCheckerを実行します。
+    // 期待: php_bin_check が NG/missing になり、総合配置確認として検出できます。
+    // 防ぐ事故: cron入口や主要クラスのアップロード漏れに気づかないまま、実行時に初めて失敗すること。
+    $dir = tempDir();
+    createRequiredPhpFiles($dir);
+    unlink($dir . '/bin/check.php');
+    createRuntimeDirs($dir);
+    writeConfig($dir);
+
+    $checker = new SetupChecker($dir);
+    $results = $checker->run();
+    $byName = [];
+    foreach ($results as $result) {
+        $byName[$result['name']] = $result;
+    }
+
+    assertTrue(($byName['php_bin_check']['status'] ?? null) === 'NG', 'setup checker must fail when bin/check.php is missing.');
+    assertTrue(($byName['php_bin_check']['reason'] ?? null) === 'missing', 'missing PHP file must be reported as missing.');
+}
+
+function testSetupCheckerEmptyPhpFile(): void
+{
+    // 前提: 主要PHPファイルは存在するが、アップロード失敗などで空になっている状態です。
+    // 操作: src/EarthquakeChecker.phpだけを空ファイルにしてSetupCheckerを実行します。
+    // 期待: php_src_EarthquakeChecker が NG/empty になります。
+    // 防ぐ事故: 空ファイルを「存在するからOK」と誤判定し、cron実行時の致命的エラーを見逃すこと。
+    $dir = tempDir();
+    createRequiredPhpFiles($dir, ['src/EarthquakeChecker.php' => '']);
+    createRuntimeDirs($dir);
+    writeConfig($dir);
+
+    $checker = new SetupChecker($dir);
+    $results = $checker->run();
+    $byName = [];
+    foreach ($results as $result) {
+        $byName[$result['name']] = $result;
+    }
+
+    assertTrue(($byName['php_src_EarthquakeChecker']['status'] ?? null) === 'NG', 'setup checker must fail when a major PHP file is empty.');
+    assertTrue(($byName['php_src_EarthquakeChecker']['reason'] ?? null) === 'empty', 'empty PHP file must be reported as empty.');
+}
+
 function testSetupCheckerSkipsFormDirectoriesWhenStockDisabled(): void
 {
     // 前提: form_stock_enabled=false はフォームストックを使わず、固定form_urlで検証する例外的な構成です。
@@ -642,6 +728,7 @@ function testSetupCheckerSkipsFormDirectoriesWhenStockDisabled(): void
     // 期待: フォームストック用ディレクトリを必須扱いせず、setup_checkはOKになります。
     // 防ぐ事故: Config::load()では有効な固定URLモードなのに、setup_checkだけが設定モードと矛盾したNGを出すこと。
     $dir = tempDir();
+    createRequiredPhpFiles($dir);
     mkdir($dir . '/storage', 0775, true);
     writeConfig($dir, [
         'form_stock_enabled' => false,
@@ -661,6 +748,7 @@ function testSetupCheckerNotWritableDirectory(): void
     // 期待: not_writableとして検出します。権限変更を反映しない環境ではテストを安全にスキップします。
     // 防ぐ事故: state/logを書けない状態でcronを動かし、通知済み保存や障害調査ログが残らないこと。
     $dir = tempDir();
+    createRequiredPhpFiles($dir);
     createRuntimeDirs($dir);
     writeConfig($dir);
     chmod($dir . '/storage', 0555);
@@ -802,6 +890,8 @@ $tests = [
     'setup checker success' => 'testSetupCheckerSuccess',
     'setup checker missing config' => 'testSetupCheckerMissingConfig',
     'setup checker missing directory' => 'testSetupCheckerMissingDirectory',
+    'setup checker missing PHP file' => 'testSetupCheckerMissingPhpFile',
+    'setup checker empty PHP file' => 'testSetupCheckerEmptyPhpFile',
     'setup checker skips form directories when stock disabled' => 'testSetupCheckerSkipsFormDirectoriesWhenStockDisabled',
     'setup checker not writable directory' => 'testSetupCheckerNotWritableDirectory',
     'connectivity checker uses short test message' => 'testConnectivityCheckerUsesShortTestMessage',
