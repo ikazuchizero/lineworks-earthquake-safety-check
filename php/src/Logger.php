@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 final class Logger
 {
+    // app.logへ追跡用の最小情報を書き出す。
+    // 障害調査に必要なreasonや件数は残すが、実フォームURL・token・secret・room_idは呼び出し側で渡さない。
     // app.log へ実行状況を書き出すための最小ロガー。
     // ログファイルはGit管理外だが、外部共有時は秘密値や実URLが混ざっていないか必ず確認する。
     private string $path;
@@ -27,6 +29,8 @@ final class Logger
     /** @param array<string, mixed> $context */
     private function write(string $level, string $message, array $context): void
     {
+        // health_check は ERROR / WARNING / check_completed / notification_completed を読む。
+        // ログキー名を変えると運用監視の意味も変わるため、追加時はHealthChecker側との整合を見る。
         // ログには件数・skip理由・dedupe_keyなど調査に必要な情報だけを渡す運用。
         // token、secret、private key、実フォームURL、room_idなどは呼び出し側で入れないこと。
         $dir = dirname($this->path);

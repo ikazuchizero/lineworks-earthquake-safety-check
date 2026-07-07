@@ -3,10 +3,20 @@ declare(strict_types=1);
 
 final class EarthquakeChecker
 {
+    // PHP版BOTの本体フローをまとめるクラス。
+    //
+    // このクラスは、1回のcron実行で次の流れをつなぐ。
+    // 1. フォーム補充CSVを取り込み、forms.json の在庫状態へ反映する。
+    // 2. P2PQuakeから複数件の地震情報を取得する。
+    // 3. notify_scale、dedupe_key、earthquake_time、UNKNOWN保留状態、フォーム枯渇skip状態を見て通知対象を絞る。
+    // 4. 通知対象ごとにフォームURLを確保し、LINE WORKSへ安否確認本文を送る。
+    // 5. LINE WORKS送信成功後にだけ forms.json の used 化と state.json の notified 確定を行う。
+    // 6. フォーム枯渇で送れなかった地震は notified ではなく skipped_due_to_form_stock_out として保存する。
+    // 7. 低在庫通知、フォーム枯渇の保守通知、health_check が読む notification_completed ログを残す。
+    //
+    // 送信・state保存・フォーム消費の順序を変えると、通知漏れ、二重通知、フォームURLの空消費が起きやすい。
+    // そのため、ここでは「送信前に確定してよい状態」と「送信成功後にだけ確定する状態」を明確に分ける。
     private const STOCK_OUT_REMINDER_INTERVAL_SECONDS = 21600;
-
-    // 地震取得、通知対象抽出、フォームURL解決、LINE WORKS送信、state保存をつなぐ中核クラス。
-    // 事故防止のため「送信成功前にstateやフォームを確定しない」順序をここで守る。
     private Config $config;
     private P2PQuakeClient $p2pQuakeClient;
     private LineWorksClient $lineWorksClient;
@@ -54,19 +64,28 @@ final class EarthquakeChecker
 
     public function run(): void
     {
-        // 全体フローの入口。
-        // 1. 必要ならCSV取り込み 2. 地震取得 3. 通知対象抽出 4. 送信 5. state/form更新 の順で進める。
+        // check.php から呼ばれる1回分のcron処理。
+        //
+        // 1. form_stock_enabled=true の場合だけ、地震確認前に forms.csv を取り込む。
+        // 2. P2PQuakeを limit=10 で取得し、直近1件だけを見ることによる通知漏れを避ける。
+        // 3. selectNotificationTargets() で、震度条件・重複・UNKNOWN保留・フォーム枯渇skipをまとめて判定する。
+        // 4. 以前のフォーム枯渇管理通知が未達なら、P2PQuakeの最新結果とは独立して保守通知だけ再試行する。
+        // 5. 通知対象がない場合だけ、平時のフォーム在庫0件リマインドを必要に応じて送る。
+        // 6. 未通知地震は earthquake_time の古い順に並べ、利用者への通知順を発生順に近づける。
+        // 7. 通知対象ごとにフォームURLを確保し、LINE WORKS送信成功後にだけ forms/state を確定する。
+        // 8. 通知完了時は notification_completed を残す。check.php全体の正常終了ログ check_completed は check.php 側で記録する。
+        // 9. この実行でフォームを消費した場合だけ、最後に低在庫通知を判定する。
+        //
+        // CSV取り込み、保守通知、state/forms更新は check.php の flock() 内で実行される前提。
+        // そのため、同時cronによる state/forms の競合をできるだけ避けられる。
         if ($this->config->formStockEnabled()) {
             $this->importForms();
         }
 
-        // php/bin/check.php 側で P2PQuake は limit=10 で取得する。
-        // limit=1 にすると、震度5弱以上の地震直後に震度1などの対象外情報が来た場合、
-        // 本来通知すべき地震を見落とす可能性があるため、複数件を確認する。
         $events = $this->p2pQuakeClient->fetchEarthquakes();
 
-        // notify_scale は通知対象にする最小震度コード。
-        // 0 はテスト用。本番では通常、震度5弱相当の45以上へ戻す必要がある。
+        // notify_scale はP2PQuakeの震度コードで、45は震度5弱を表す。
+        // 検証時に低い値へ変えると通知対象が広がるため、コメントと実値の不一致に注意する。
         $targets = $this->selectNotificationTargets($events);
         $this->retryUndeliveredStockOutNotices();
 
@@ -91,6 +110,16 @@ final class EarthquakeChecker
         $usedFormCount = 0;
 
         foreach ($targets as $target) {
+            // 通知対象1件の送信処理。
+            //
+            // フォームURLは先に確保するが、この時点ではまだ used にしない。
+            // LINE WORKS送信成功後にだけ、forms.json の該当フォームを used にし、
+            // state.json へ notified と notified_by_earthquake_time を保存する。
+            //
+            // この順序を変えると、次の事故が起きる。
+            // - 送信前に notified を保存する: 送信失敗時に次回再試行されず通知漏れになる。
+            // - 送信前にフォームを used にする: 送信失敗時にフォームURLだけが失われる。
+            // - state保存に失敗する: 次回再通知の可能性は残るが、送信前に通知済みにするより安全側。
             $form = $this->resolveFormForNotification($target);
 
             if ($form === null) {
@@ -98,9 +127,6 @@ final class EarthquakeChecker
             }
 
             try {
-                // この時点ではフォームURLはまだ未使用扱いのまま。
-                // LINE WORKS送信に失敗した場合は、フォームをusedにせずstateも保存しない。
-                // テストモードでは固定 form_url を送るだけで、フォーム在庫のused化は行わない。
                 $this->lineWorksClient->sendMessage($this->createMessage($target, $form['url']));
             } catch (Throwable $e) {
                 $this->logger->error('LINE WORKS send failed.', $this->logContext($target, [
@@ -111,15 +137,13 @@ final class EarthquakeChecker
 
             try {
                 if ($this->config->formStockEnabled()) {
-                    // LINE WORKSがメッセージを受け付けた後にだけフォーム消費を確定する。
-                    // 送信前に保存すると、送信失敗時にフォームだけ失われる。
+                    // LINE WORKSが本文を受け付けた後にだけフォーム消費を確定する。
                     $this->formStockStore->markUsed($form['index'], $target['dedupe_key']);
                     $this->formStockStore->save();
                     $usedFormCount++;
                 }
 
-                // state保存も送信成功後に行う。
-                // ここで保存に失敗すると次回再通知の可能性はあるが、通知漏れより安全側に倒す。
+                // 通知済みstateもLINE WORKS送信成功後にだけ確定する。
                 $notifiedAt = gmdate('c');
                 $record = [
                     'dedupe_key' => $target['dedupe_key'],
@@ -168,6 +192,14 @@ final class EarthquakeChecker
     /** @param array<string, mixed> $target */
     private function resolveFormForNotification(array $target): ?array
     {
+        // 通知本文に載せるフォームURLを決める。
+        //
+        // form_stock_enabled=true では forms.json の available だけを使い、固定 form_url へはfallbackしない。
+        // 同じフォームURLを複数の地震に使うと、回答が混ざり、どの地震への安否回答か分からなくなるため。
+        //
+        // available がない場合は安否確認本文を送らない。
+        // 代わりに skipped_due_to_form_stock_out として state に残し、保守通知先へフォーム枯渇を知らせる。
+        // このskipは「正常送信済み」ではないが、補充後にbotが同じ地震を自動後追い送信しないための状態。
         if (!$this->config->formStockEnabled()) {
             // form_stock_enabled=false はローカル/テスト専用の簡易モード。
             // forms.json/forms.csvは使わず、固定 form_url を送る。フォームをusedにせず、
@@ -184,9 +216,6 @@ final class EarthquakeChecker
             return $form;
         }
 
-        // form_stock_enabled=true の本番運用では固定フォームURLへのfallbackは禁止。
-        // 同じフォームを複数地震で使い回すと回答が混ざるため、
-        // 安否確認通知は送らず、補充通知先へ枯渇を知らせる。
         $this->logger->error('Skipped earthquake notification because no form URL is available.', $this->logContext($target));
         $this->markSkippedDueToFormStockOut($target);
         $this->notifyStockOutForTarget($target);
@@ -196,8 +225,12 @@ final class EarthquakeChecker
 
     private function importForms(): void
     {
-        // form_stock_enabled=true のときだけ呼ばれる。
-        // CSVに実フォームURLが入っていても、ログにはURL本文を出さず件数だけ残す。
+        // フォーム補充CSVを地震チェック前に取り込む。
+        //
+        // この処理は form_stock_enabled=true のときだけ呼ばれる。
+        // forms.csv には実フォームURLが入るため、ログにはURL本文を出さず、取り込み件数・重複件数・不正行件数だけを残す。
+        // 取り込み成功時は processed、失敗時は failed へ移動されるため、同じCSVを次回cronで繰り返し処理しない。
+        // CSV取り込み失敗は安否確認本体とは別の運用問題なので、保守通知先へ短く知らせる。
         try {
             $result = $this->formStockStore->importCsvIfExists();
         } catch (FormImportException $e) {
@@ -229,10 +262,11 @@ final class EarthquakeChecker
 
     private function notifyLowStockAfterConsumption(): void
     {
-        // 低在庫通知は通常cronごとには送らない。
-        // この実行でフォームを1件以上消費した場合だけ、実行末尾で最大1回送る。
-        // 低在庫状態が続いていても、次回以降にフォーム消費があれば再通知してよい。
-        // 1回の通知見落としで枯渇まで気づけない事故を防ぐため。
+        // 低在庫通知は「この実行でフォームを1件以上消費した後」の最後にだけ判定する。
+        //
+        // 通常cronごとに送ると連投になるが、フォーム消費後なら在庫が実際に減ったタイミングなので通知する意味がある。
+        // 低在庫状態が続いていても、次回以降にまたフォームを消費した場合は再通知してよい。
+        // ただし、同じ実行で対象地震ありのフォーム枯渇通知を送っている場合は、低在庫通知を重ねない。
         $availableCount = $this->formStockStore->availableCount();
         $threshold = $this->config->formLowStockThreshold();
 
@@ -263,8 +297,12 @@ final class EarthquakeChecker
     /** @param array<string, mixed> $target */
     private function markSkippedDueToFormStockOut(array $target): void
     {
-        // フォーム枯渇時は notified には入れない。
-        // 補充後にbotが同じ地震を後追い自動送信しないよう、別状態として手動対応扱いにする。
+        // フォーム枯渇で送れなかった地震を、正常送信済みの notified とは別状態で保存する。
+        //
+        // この状態は「安否確認本文は送れていないが、自動送信対象としては手動対応へ切り替えた」ことを表す。
+        // notified に入れないのは、正常送信済みと区別してログ・state上で追えるようにするため。
+        // 一方で dedupe_key と earthquake_time の両方を保存し、補充後にbotが同じ地震を自動後追い送信しないようにする。
+        // UNKNOWN pending からのfallbackが枯渇skipになった場合も、pendingはここで消す。
         $skippedAt = gmdate('c');
         $record = [
             'dedupe_key' => $target['dedupe_key'],
@@ -291,10 +329,15 @@ final class EarthquakeChecker
     /** @param array<string, mixed> $target */
     private function notifyStockOutForTarget(array $target, ?string $noticeDedupeKey = null): void
     {
-        // 対象地震を自動送信できなかったことを知らせる通知。
-        // stateへ先に skipped を保存しているため、同じ地震でcronが再実行されても繰り返し送らない。
-        // このフラグは、同じ実行の最後に低在庫通知を重ねないためだけに使う。
-        // 枯渇通知自体は、新規に stock out skip した対象地震ごとに送る。
+        // 対象地震をフォーム枯渇で自動送信できなかったことを、保守通知先へ知らせる。
+        //
+        // 安否確認本文は送らない。ここで送るのは管理通知だけ。
+        // 枯渇通知の到達状態は skipped_due_to_form_stock_out の notice_status に保存する。
+        // 送信成功なら sent、失敗なら failed とし、failed/pending は後続cronで管理通知だけ再試行する。
+        // 再試行されるのは枯渇管理通知であり、フォーム補充後も安否確認本文を自動で後追い送信しない。
+        //
+        // stockOutNotifiedThisRun は、同じ実行の最後に低在庫通知や平時リマインドを重ねないためのフラグ。
+        // 枯渇通知そのものは notice_status により対象地震ごとに管理する。
         $this->stockOutNotifiedThisRun = true;
         $noticeDedupeKey ??= (string) $target['dedupe_key'];
 
@@ -326,6 +369,11 @@ final class EarthquakeChecker
 
     private function retryUndeliveredStockOutNotices(): void
     {
+        // フォーム枯渇の管理通知が未達だった地震を、P2PQuakeの最新取得結果とは独立して再試行する。
+        //
+        // P2PQuakeの取得件数には上限があるため、対象地震が次回取得結果から消えることがある。
+        // その場合でも、state上に notice_status=pending/failed が残っていれば管理通知だけ再試行する。
+        // ここで安否確認本文は絶対に送らない。フォーム補充後も、枯渇skip済み地震は自動後追い送信しない。
         if (!$this->config->formStockEnabled()) {
             return;
         }
@@ -355,6 +403,9 @@ final class EarthquakeChecker
      */
     private function targetFromStockOutRecord(string $dedupeKey, array $record): ?array
     {
+        // skipped_due_to_form_stock_out のrecordから、ログ出力と管理通知retryに使うtarget形へ戻す。
+        // 古いstateや壊れたrecordでは earthquake_time が欠ける可能性があるため、その場合はnullで安全にskipする。
+        // ここで復元するtargetは保守通知用であり、安否確認本文の後追い送信には使わない。
         $earthquakeTime = trim((string) ($record['earthquake_time'] ?? ''));
 
         if ($earthquakeTime === '') {
@@ -383,6 +434,11 @@ final class EarthquakeChecker
 
     private function notifyStockOutReminderIfNeeded(): void
     {
+        // 対象地震がない平時に、フォーム在庫0件を知らせるリマインド。
+        //
+        // 対象地震ありのフォーム枯渇管理通知とは、状態も文面も抑止条件も分ける。
+        // 平時リマインドは「今は地震通知に失敗していないが、このままだと次の対象地震で自動送信できない」ことを知らせるもの。
+        // 連投を避けるため、stock_out_reminder の最終通知時刻で6時間に1回までに抑える。
         if (!$this->config->formStockEnabled()) {
             return;
         }
@@ -439,8 +495,20 @@ final class EarthquakeChecker
      */
     private function selectNotificationTargets(array $events): array
     {
-        // event.id単体ではなく、dedupe_key と earthquake_time の両方で重複を抑える。
-        // UNKNOWN震源地は即通知せず、震源地名ありの続報を待ってから必要な場合だけ通知する。
+        // P2PQuakeから取得した複数イベントを、今回送るべき通知候補へ絞り込む。
+        //
+        // P2PQuakeには速報・震源情報・震源震度情報・続報が混ざり、同じ地震でも event.id が変わる可能性がある。
+        // そのため event.id だけでは重複判定しない。
+        //
+        // notify_scale はP2PQuakeの震度コードで、表示用の「5弱」などの文字列ではない。
+        // buildCandidate() で作る dedupe_key は earthquake.time + hypocenter.name。
+        // maxScale は続報で変わる可能性があるため、dedupe_key には含めない。
+        //
+        // stateの役割:
+        // - notified: その dedupe_key の安否確認本文をLINE WORKSへ送信済み。
+        // - notified_by_earthquake_time: UNKNOWN通知後に震源地名あり続報が来ても、同じ発生時刻なら再通知しないための索引。
+        // - skipped_due_to_form_stock_out: 安否確認本文は未送信だが、フォーム枯渇により手動対応へ切り替えた地震。
+        // - pending_unknown_by_earthquake_time: UNKNOWN震源を即通知せず、名前確定続報を待つための保留状態。
         $candidatesByTime = [];
         $stateChanged = false;
         $this->skippedStockOutTargetThisRun = false;
@@ -492,6 +560,8 @@ final class EarthquakeChecker
             }));
 
             if ($namedCandidates !== []) {
+                // UNKNOWN保留ルール: 同じ発生時刻で UNKNOWN と震源地名あり候補が混在したら、震源地名ありを優先する。
+                // UNKNOWNを先に送ると、その後の震源地名あり続報と二重通知になりやすいため。
                 $candidate = $namedCandidates[0];
 
                 if ($this->stateStore->getPendingUnknown($earthquakeTime) !== null) {
@@ -509,6 +579,8 @@ final class EarthquakeChecker
             $pending = $this->stateStore->getPendingUnknown($earthquakeTime);
 
             if ($pending === null) {
+                // UNKNOWN保留ルール: UNKNOWNしかない初回は送らず、pending_unknown_by_earthquake_time へ保存する。
+                // hold時間内に震源地名あり続報が来れば、UNKNOWNではなく名前あり候補を1件だけ送る。
                 $this->stateStore->markPendingUnknown($earthquakeTime, $this->pendingUnknownRecord($unknownCandidate));
                 $stateChanged = true;
                 $this->logger->info('Skipped earthquake event.', $this->logContext($unknownCandidate, [
@@ -518,18 +590,24 @@ final class EarthquakeChecker
             }
 
             if (!$this->isPendingUnknownExpired($pending)) {
+                // UNKNOWN保留ルール: hold時間内はまだ送らない。
+                // この間はフォームURLも消費せず、通知済みstateにも入れない。
                 continue;
             }
 
+            // UNKNOWN保留ルール: hold時間を過ぎても名前確定続報が来なければ、UNKNOWNのままfallback通知する。
             $this->logger->info('UNKNOWN hypocenter pending expired.', $this->logContext($unknownCandidate, [
                 'reason' => 'unknown_hypocenter_pending_expired',
             ]));
             $this->addTargetIfNotSeen($targets, $seenDedupeKeys, $seenEarthquakeTimes, $unknownCandidate);
         }
 
-        // ここからは、今回のP2PQuake取得結果に残っていない pending UNKNOWN も確認する。
-        // APIの取得件数には上限があるため、保留中の地震が次回取得結果から消えていても、
-        // 保留時間を過ぎたら UNKNOWN のまま1回だけ通知できるようにする。
+        // UNKNOWN保留ルール: 今回のP2PQuake取得結果に残っていないpendingも確認する。
+        //
+        // API取得件数には上限があるため、保留中の地震が次回取得結果から消えることがある。
+        // その場合でも、pending_unknown_by_earthquake_time に残っていれば、hold超過後にUNKNOWNのままfallbackできる。
+        // ただし、すでに notified または skipped_due_to_form_stock_out 済みならpendingを消す。
+        // 残しておくと、次回以降も同じ保留recordを見続けて運用判断を誤るため。
         foreach ($this->stateStore->pendingUnknowns() as $earthquakeTime => $pending) {
             if ($this->stateStore->hasNotifiedEarthquakeTime($earthquakeTime)) {
                 $this->stateStore->removePendingUnknown($earthquakeTime);
@@ -601,6 +679,10 @@ final class EarthquakeChecker
      */
     private function addTargetIfNotSeen(array &$targets, array &$seenDedupeKeys, array &$seenEarthquakeTimes, array $candidate): void
     {
+        // 同一実行内の二重追加を止める最後のガード。
+        //
+        // stateにまだ保存されていない同一レスポンス内の続報は、ここで dedupe_key と earthquake_time の両方を見る。
+        // dedupe_key は同じ震源名の重複を、earthquake_time は UNKNOWN と震源地名ありの混在を抑える。
         if (isset($seenDedupeKeys[$candidate['dedupe_key']])) {
             return;
         }
@@ -617,6 +699,10 @@ final class EarthquakeChecker
     /** @param array<string, mixed> $candidate */
     private function pendingUnknownRecord(array $candidate): array
     {
+        // pending_unknown_by_earthquake_time に保存するUNKNOWN保留recordを作る。
+        //
+        // 初回検出時刻 first_seen_at を持たせ、hold時間を過ぎたか後続cronで判断できるようにする。
+        // このrecord作成だけではフォームURLを確保せず、notifiedにも入れない。
         return [
             'dedupe_key' => $candidate['dedupe_key'],
             'event_id' => $candidate['event_id'],
@@ -633,6 +719,10 @@ final class EarthquakeChecker
      */
     private function candidateFromPendingUnknown(string $earthquakeTime, array $pending): ?array
     {
+        // pending_unknown_by_earthquake_time のrecordから、通知候補candidateを復元する。
+        //
+        // P2PQuake取得結果から対象地震が消えた後でも、hold超過後にUNKNOWN fallbackできるようにするため。
+        // earthquake_time が復元できないrecordは壊れているためnullにし、呼び出し側でpendingを掃除する。
         $pendingEarthquakeTime = trim((string) ($pending['earthquake_time'] ?? $earthquakeTime));
 
         if ($pendingEarthquakeTime === '') {
@@ -668,6 +758,10 @@ final class EarthquakeChecker
     /** @param array<string, mixed> $pending */
     private function isPendingUnknownExpired(array $pending): bool
     {
+        // UNKNOWN保留がhold時間を超えたか判定する。
+        //
+        // first_seen_at が壊れている場合、永遠に保留されるよりは運用ログを残して期限切れ扱いにする。
+        // その後の通知可否は notify_scale や既存stateの判定でさらに絞られる。
         $firstSeenAt = (string) ($pending['first_seen_at'] ?? '');
         $firstSeenTimestamp = strtotime($firstSeenAt);
 
@@ -687,8 +781,12 @@ final class EarthquakeChecker
      */
     private function buildCandidate(array $event): ?array
     {
-        // P2PQuakeのレスポンスは外部API由来なので、必須要素が欠ける可能性がある。
-        // 欠けたイベントはskip理由を残し、無理に通知対象へしない。
+        // P2PQuakeレスポンス1件を、以降の判定で使うcandidateへ正規化する。
+        //
+        // 必須要素が欠ける外部APIレスポンスは、無理に補完して送らずskip理由をログに残す。
+        // hypocenter.name が空なら UNKNOWN に寄せる。
+        // dedupe_key は earthquake.time + hypocenter.name で作り、maxScale は含めない。
+        // maxScaleを含めると、同じ地震の続報で最大震度だけ上がった場合に別地震扱いになり二重通知しやすい。
         $eventId = (string) ($event['id'] ?? '');
         $earthquake = $event['earthquake'] ?? null;
 
@@ -723,8 +821,6 @@ final class EarthquakeChecker
 
         $maxScale = (int) ($earthquake['maxScale'] ?? 0);
 
-        // maxScale は dedupe_key に含めない。
-        // 同じ地震の続報で最大震度だけ上がった場合に、別キー扱いで二重通知しないため。
         $dedupeKey = $earthquakeTime . '|' . $hypocenterName;
 
         return [
@@ -740,8 +836,10 @@ final class EarthquakeChecker
     /** @param array<string, mixed> $target */
     private function createMessage(array $target, string $formUrl): string
     {
-        // 安否確認メッセージ本文を作る。
-        // formUrlは実フォームURLなので、ここでログ出力せずLINE WORKS本文にだけ入れる。
+        // 利用者へ送る安否確認本文を作る。
+        //
+        // formUrl は実フォームURLなので、ログ・例外・テスト出力へは出さず、LINE WORKS本文にだけ含める。
+        // ここで本文を作るだけでは state/forms は更新しない。更新は送信成功後のrun()側で行う。
         $formattedTime = $this->formatEarthquakeTime((string) $target['earthquake_time']);
         $hypocenterName = (string) $target['hypocenter_name'];
         $scaleText = $this->scaleText((int) $target['max_scale']);
@@ -766,8 +864,11 @@ TEXT;
 
     private function formatEarthquakeTime(string $value): string
     {
-        // P2PQuake/JMAの earthquake.time は、タイムゾーン指定がない場合でも日本時間として扱う。
-        // UTC扱いしてAsia/Tokyoへ変換すると、表示時刻が+9時間ずれるため。
+        // earthquake.time を利用者向け表示へ整える。
+        //
+        // タイムゾーン指定がない値は、JMA/P2PQuake由来の日本時間として解釈する。
+        // UTC扱いしてからAsia/Tokyoへ変換すると、表示時刻が9時間ずれる。
+        // Z や +09:00 のようにタイムゾーン指定がある場合は、その指定を尊重してAsia/Tokyo表示にする。
         try {
             $displayTimeZone = new DateTimeZone('Asia/Tokyo');
             $hasTimeZone = preg_match('/(?:Z|[+-]\d{2}:?\d{2})$/', $value) === 1;
@@ -794,6 +895,10 @@ TEXT;
      */
     private function logContext(array $target, array $extra = []): array
     {
+        // 地震1件を追跡するためのログcontextを作る。
+        //
+        // event_id、earthquake_time、hypocenter_name、max_scale、dedupe_key は調査用に残す。
+        // 実フォームURL、room_id、bot_id、token、secret、private key はここへ入れない。
         return array_merge([
             'event_id' => $target['event_id'],
             'earthquake_time' => $target['earthquake_time'],
@@ -805,6 +910,10 @@ TEXT;
 
     private function safeErrorSummary(Throwable $e): string
     {
+        // 保守ログやstateに残すエラー要約を短くする。
+        //
+        // 外部APIレスポンス全文や長い例外文をそのまま残すと、秘匿情報や不要な詳細が広がる可能性がある。
+        // ここでは改行を潰し、先頭200文字だけを保存する。
         $message = preg_replace('/\s+/', ' ', $e->getMessage()) ?? '';
 
         return substr($message, 0, 200);

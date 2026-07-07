@@ -16,6 +16,8 @@ final class SetupChecker
         $results = [];
         $configPath = $this->rootDir . '/config.php';
 
+        // 初回アップロード直後に、配置漏れ・権限不足・設定不足をまとめて確認するためのチェック。
+        // 実設定値や秘密鍵の中身は表示せず、setup_check.php では OK/NG と原因分類だけを出す。
         $results[] = $this->checkFileReadable('config_file', $configPath);
 
         $config = null;
@@ -27,20 +29,28 @@ final class SetupChecker
         }
 
         $storageDir = $this->rootDir . '/storage';
-        $formsDir = $this->rootDir . '/forms';
         $results[] = $this->checkDirectoryWritable('storage_dir', $storageDir);
-        $results[] = $this->checkDirectoryWritable('forms_dir', $formsDir);
 
         if ($config === null) {
             return $results;
         }
 
+        // 秘密鍵は中身を検査せず、存在・読込可・空でないことだけを見る。
+        // パスの詳細や秘密情報を出すと、設置確認ログ自体が漏洩リスクになるため。
         $results[] = $this->checkFileReadable('private_key_file', $config->privateKeyPath(), true);
-        $results[] = $this->checkDirectoryWritable('form_processed_dir', $config->formImportProcessedDir());
-        $results[] = $this->checkDirectoryWritable('form_failed_dir', $config->formImportFailedDir());
         $results[] = $this->checkDirectoryWritable('state_dir', dirname($this->rootDir . '/storage/state.json'));
-        $results[] = $this->checkDirectoryWritable('form_stock_dir', dirname($config->formStockPath()));
 
+        if ($config->formStockEnabled()) {
+            // フォームストック運用では、補充CSVの配置先・処理済み/失敗CSVの移動先・
+            // forms.json の保存先が揃っていないと、補充失敗やフォーム再利用事故につながる。
+            $results[] = $this->checkDirectoryWritable('forms_dir', $this->rootDir . '/forms');
+            $results[] = $this->checkDirectoryWritable('form_processed_dir', $config->formImportProcessedDir());
+            $results[] = $this->checkDirectoryWritable('form_failed_dir', $config->formImportFailedDir());
+            $results[] = $this->checkDirectoryWritable('form_stock_dir', dirname($config->formStockPath()));
+        }
+
+        // form_stock_enabled=false は検証用の固定form_urlモード。
+        // Config::load() が固定URLの妥当性を検証済みなので、forms系ディレクトリは必須扱いしない。
         return $results;
     }
 

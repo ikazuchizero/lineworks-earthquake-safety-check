@@ -6,6 +6,8 @@ require_once __DIR__ . '/../src/Config.php';
 require_once __DIR__ . '/../src/LineWorksClient.php';
 require_once __DIR__ . '/../src/ConnectivityChecker.php';
 
+// 初回設置後のLINE WORKS疎通確認用入口。
+// 地震情報取得や安否確認本文送信は行わず、短い検証メッセージだけを送る。
 $rootDir = dirname(__DIR__);
 
 try {

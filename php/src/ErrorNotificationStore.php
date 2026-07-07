@@ -15,6 +15,8 @@ final class ErrorNotificationStore
 
     public function shouldNotify(string $fingerprint, int $intervalSeconds): bool
     {
+        // 本体の state.json は「地震を通知済みか」を管理する。
+        // このファイルはそれとは別に、処理失敗チャット通知の連投抑止だけを管理する。
         $data = $this->load();
         $lastFingerprint = (string) ($data['last_error_fingerprint'] ?? '');
         $lastNotifiedAt = (string) ($data['last_error_notified_at'] ?? '');
@@ -29,6 +31,8 @@ final class ErrorNotificationStore
 
     public function markNotified(string $fingerprint): void
     {
+        // fingerprint は「同じエラーを短時間に何度も送らない」ための一時的な抑止キー。
+        // 恒久的な障害分類ではないため、原因調査は app.log 側で行う。
         $this->load();
         $this->data['last_error_fingerprint'] = $fingerprint;
         $this->data['last_error_notified_at'] = gmdate('c');
@@ -38,6 +42,8 @@ final class ErrorNotificationStore
     /** @return array<string, mixed> */
     private function load(): array
     {
+        // このJSONが壊れている場合は、連投抑止が効かない状態で進めず例外にする。
+        // 失敗通知用stateであり、本体の通知済みstateとは混ぜない。
         if ($this->data !== null) {
             return $this->data;
         }
@@ -67,6 +73,8 @@ final class ErrorNotificationStore
 
     private function save(): void
     {
+        // 失敗通知の抑止状態もtmp経由で保存する。
+        // 壊れたJSONを残すと、次回以降に同じエラー通知が連投される可能性があるため。
         $dir = dirname($this->path);
         if (!is_dir($dir) && !mkdir($dir, 0775, true)) {
             throw new RuntimeException('Failed to create error notification state directory.');

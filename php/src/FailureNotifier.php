@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 final class FailureNotifier
 {
+    // check.php の致命的な処理失敗を、保守通知先へ短く知らせるためのクラス。
+    // 通知本文には分類とログ確認依頼だけを入れ、例外詳細や秘匿値を広げない。
     private const SUPPRESS_SECONDS = 3600;
 
     private LineWorksClient $lineWorksClient;
@@ -18,6 +20,8 @@ final class FailureNotifier
 
     public function notify(Throwable $error, string $category): bool
     {
+        // 同じエラーをcronごとに連投しないため、ErrorNotificationStoreのfingerprintで抑止する。
+        // LINE WORKSそのものの失敗は再帰通知になりやすいため、ここでは送らない。
         // LINE WORKS自体の失敗をLINE WORKSへ通知しようとすると、同じ失敗を繰り返すだけになる。
         // その場合はapp.logに任せ、チャット通知の再帰を避ける。
         if (str_contains($error->getMessage(), 'LINE WORKS')) {

@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 final class StateStore
 {
+    // state.json は通知済み・UNKNOWN保留・フォーム枯渇skip・平時リマインドをまとめて保持する。
+    // ここを空扱いで進めると、過去の通知済み情報が消えた扱いになり二重通知につながる。
     // state.json は「どの地震を通知済みにしたか」と、UNKNOWN震源地の保留状態を保持する。
     // dedupe_keyだけでなく earthquake_time 単位でも通知済みを見て、UNKNOWN→震源地あり続報の二重通知を防ぐ。
     private string $path;
@@ -67,6 +69,8 @@ final class StateStore
     /** @return array<string, array<string, mixed>> */
     public function stockOutNoticeRetryRecords(): array
     {
+        // フォーム枯渇で安否確認本文を送れなかった地震のうち、
+        // 管理通知が未達のものだけを返す。P2PQuakeの最新取得結果から消えた後でも再試行するため。
         $state = $this->load();
         $records = [];
 
@@ -128,6 +132,8 @@ final class StateStore
 
     public function markStockOutNoticeResult(string $dedupeKey, string $status, ?string $error = null): void
     {
+        // 対象地震ありのフォーム枯渇管理通知の到達状態を更新する。
+        // sent になったものは再通知せず、failed/pending は後続cronで管理通知だけ再試行する。
         $this->load();
 
         if (!isset($this->state['skipped_due_to_form_stock_out'][$dedupeKey]) || !is_array($this->state['skipped_due_to_form_stock_out'][$dedupeKey])) {
@@ -176,6 +182,8 @@ final class StateStore
 
     public function clearStockOutReminderAlerted(): void
     {
+        // 平時リマインドは在庫が回復したら抑止状態を解除する。
+        // 次に0件へ落ちたとき、古い通知時刻のせいで必要なリマインドが抑止されないようにするため。
         $this->load();
         $this->state['last_empty_stock_reminded_at'] = null;
         $this->state['stock_out_reminder']['last_alerted_at'] = null;
@@ -218,6 +226,8 @@ final class StateStore
 
     public function removePendingUnknown(string $earthquakeTime): void
     {
+        // UNKNOWN保留は、通知済み・フォーム枯渇skip・壊れたrecord掃除などで不要になった時点で消す。
+        // 呼び出し側は、この削除を永続化するために必要なら save() する。
         $this->load();
         unset($this->state['pending_unknown_by_earthquake_time'][$earthquakeTime]);
     }

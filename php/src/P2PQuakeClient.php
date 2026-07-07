@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 class P2PQuakeClient
 {
+    // P2PQuakeから地震情報を取得する薄いクライアント。
+    // 通知対象判定・重複排除・UNKNOWN保留はEarthquakeChecker側で行い、ここでは取得失敗を例外にする。
     // P2PQuake APIから地震情報を取得するだけのクラス。
     // 通知判定や重複判定はEarthquakeChecker側で行い、ここではレスポンスを大きく加工しない。
     private string $apiUrl;
@@ -23,6 +25,8 @@ class P2PQuakeClient
     /** @return array<int, array<string, mixed>> */
     public function fetchEarthquakes(): array
     {
+        // 外部APIなのでHTTP失敗・JSON不正・想定外shapeは安全側に例外で止める。
+        // 壊れたレスポンスを空配列扱いにすると、通知対象地震を見落とす可能性がある。
         // 外部APIなので、HTTP失敗・JSON不正・想定外の形は例外で止める。
         // 不完全なデータを空扱いすると通知漏れの原因になる。
         $url = $this->buildUrl();
@@ -51,6 +55,8 @@ class P2PQuakeClient
 
     private function buildUrl(): string
     {
+        // API URLに既存クエリがあってもlimitを明示的に設定する。
+        // limit=1へ戻すと、直近の対象外情報で対象地震を見落とすため。
         // 既存クエリがあっても limit を明示的に上書きする。
         // 運用上の通知漏れ防止条件をURL設定側のミスで崩さないため。
         $parts = parse_url($this->apiUrl);
@@ -119,6 +125,8 @@ class P2PQuakeClient
     /** @param array<int, string> $headers */
     private function statusCodeFromHeaders(array $headers): int
     {
+        // 複数のHTTPステータス行がある場合は最後の行を採用する。
+        // proxyやリダイレクトを挟んでも、最終レスポンスで成功/失敗を判定する。
         // HTTP/1.1 200 OK のようなステータス行から3桁コードを取り出す。
         // 取得失敗は例外にして、古いstateやフォーム状態を不用意に更新しない。
         $statusCode = 0;

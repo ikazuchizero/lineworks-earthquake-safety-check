@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 final class Config
 {
+    // 実運用の設定は Git 管理外の config.php に置く。
+    // このクラスは値そのものを表示せず、必須項目・型・プレースホルダー残りを起動時に検出する。
     // config.example.php は公開できるテンプレート、config.php はGit管理外の実設定。
     // ここでは実値を表示せず、空値・型・本番/テスト切り替え条件だけを検証する。
     /** @var array<string, mixed> */
@@ -36,6 +38,8 @@ final class Config
 
     public function notifyScale(): int
     {
+        // P2PQuakeの震度コードを返す。例: 45 は震度5弱相当、0 は疎通・検証用。
+        // EarthquakeChecker はこの値未満の地震を通知対象外にする。
         return (int) $this->values['notify_scale'];
     }
 
@@ -135,6 +139,8 @@ final class Config
 
     private function validate(): void
     {
+        // ここで落とせる設定ミスは起動時に止める。
+        // 送信途中で不足に気づくと、通知漏れやフォームURLだけ消費する事故に近づくため。
         // 起動時に設定不備を止める。
         // 送信途中で不足に気づくと、通知漏れやフォーム消費だけが起きる事故につながる。
         $this->requireNotifyScale();
@@ -187,6 +193,8 @@ final class Config
 
     private function requireNonEmptyString(string $key): void
     {
+        // 空文字と REPLACE_WITH_... はどちらも未設定扱いにする。
+        // 値そのものは例外文へ出さず、どのキーが未設定かだけを伝える。
         if (!array_key_exists($key, $this->values) || trim((string) $this->values[$key]) === '') {
             throw new RuntimeException('Missing required config value: ' . $key);
         }
@@ -205,6 +213,8 @@ final class Config
 
     private function requireNotifyScale(): void
     {
+        // notify_scale はP2PQuakeの震度コードだけを許可する。
+        // 任意の数値を通すと、実在しない閾値で通知漏れ/過剰通知になり得る。
         $this->requireNumeric('notify_scale');
         $this->requireIntegerIfPresent('notify_scale');
 

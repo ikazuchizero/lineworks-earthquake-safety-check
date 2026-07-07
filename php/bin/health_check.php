@@ -6,6 +6,8 @@ require_once __DIR__ . '/../src/Config.php';
 require_once __DIR__ . '/../src/LineWorksClient.php';
 require_once __DIR__ . '/../src/HealthChecker.php';
 
+// 別cronで実行するヘルスチェック入口。
+// app.logを要約し、ログ全文や秘匿値をチャットへ流さない形で保守通知先へ送る。
 $rootDir = dirname(__DIR__);
 $storageDir = $rootDir . '/storage';
 

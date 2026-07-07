@@ -3,6 +3,9 @@ declare(strict_types=1);
 
 class LineWorksClient
 {
+    // LINE WORKS APIとの通信だけを担当する。
+    // 呼び出し側は「例外が出なければ送信成功」と判断し、その後にstate/formsを確定する。
+    // token・secret・JWT・room_id・bot_idはログや例外本文に含めない。
     // LINE WORKS APIとの通信だけを担当するクラス。
     // 呼び出し側は「送れたか/失敗したか」だけを見て、stateやフォーム消費の確定判断を行う。
     private Config $config;
@@ -14,6 +17,8 @@ class LineWorksClient
 
     public function sendMessage(string $text, ?string $roomId = null): void
     {
+        // roomId を任意指定できるのは、安否確認通知先と保守通知先を分けるため。
+        // 未指定なら通常の安否確認通知先へ送る。
         // roomId を任意指定できるようにしているのは、安否確認通知先と
         // フォーム補充・枯渇通知先を分けるため。未指定なら通常の room_id に送る。
         $accessToken = $this->getAccessToken();
@@ -48,6 +53,8 @@ class LineWorksClient
 
     private function getAccessToken(): string
     {
+        // JWT Bearerでアクセストークンを取得する。
+        // レスポンスbodyには詳細情報が含まれる可能性があるため、失敗時もHTTP statusだけを例外へ残す。
         // Bot送信の前にJWT Bearerでアクセストークンを取得する。
         // token / client_secret / assertion は秘密情報なので、ログには出さない。
         $jwt = $this->createJwt();
@@ -81,6 +88,8 @@ class LineWorksClient
 
     private function createJwt(): string
     {
+        // private keyで署名したJWTを作る。
+        // 署名材料やJWT本文は秘匿情報なので、デバッグ出力やログには絶対に出さない。
         // JWT署名には private key を使う。鍵の中身は絶対にログ・標準出力へ出さない。
         // 署名できない場合は送信を続けず、呼び出し側に例外として返す。
         if (!function_exists('openssl_sign')) {
@@ -180,6 +189,8 @@ class LineWorksClient
     /** @param array<int, string> $headers */
     private function statusCodeFromHeaders(array $headers): int
     {
+        // 100 Continue やリダイレクトなどでHTTPステータス行が複数ある場合は最後の行を採用する。
+        // 最終レスポンスのstatusで成功/失敗を判定するため、途中のHTTP行でreturnしない。
         // file_get_contents のHTTPヘッダーから 200/400 などを取り出す。
         // ここが壊れると成功レスポンスも失敗扱いになるため、正規表現を安易に変えない。
         $statusCode = 0;

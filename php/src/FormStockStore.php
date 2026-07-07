@@ -7,6 +7,9 @@ final class FormImportException extends RuntimeException
 
 final class FormStockStore
 {
+    // forms.json と forms.csv を扱うフォーム在庫専用のStore。
+    // 実フォームURLは利用者回答用の実リンクなので、ログ・例外・標準出力には本文を出さない。
+    // available/used の状態を守ることで、同じフォームURLの再利用を防ぐ。
     // forms.json は安否確認フォームURLの運用上の正本。
     // 各URLは最大1回だけ使う。実フォームURLは回答用リンクそのものなので、
     // 漏洩や誤回答を防ぐためログや標準出力へ出さない。
@@ -29,6 +32,8 @@ final class FormStockStore
     /** @return array{processed: bool, imported: int, duplicate_skipped: int, invalid_rows: int} */
     public function importCsvIfExists(): array
     {
+        // 補充担当者が置いた forms.csv があれば取り込む。
+        // 成功時は processed、失敗時は failed へ移動し、同じCSVを次回cronで繰り返し処理しない。
         // 非エンジニア担当者は forms/forms.csv をアップロードして補充する。
         // 成功したCSVは processed/ へ、失敗したCSVは failed/ へ移動し、
         // 問題のあるCSVを無限に再処理し続けないようにする。
@@ -93,6 +98,8 @@ final class FormStockStore
 
     public function availableCount(): int
     {
+        // 低在庫通知・フォーム枯渇判定で使う未使用フォーム数。
+        // used は再投入されてもavailableへ戻さないため、ここでは純粋にstatusだけを見る。
         $data = $this->load();
         $count = 0;
 
@@ -150,6 +157,8 @@ final class FormStockStore
     /** @return array{processed: bool, imported: int, duplicate_skipped: int, invalid_rows: int} */
     private function importCsv(): array
     {
+        // CSV本文のURLは、検証・重複判定には使うがログへは出さない。
+        // duplicate/invalid は件数だけ返し、非エンジニアが補充結果を確認しやすくする。
         // CSV運用ルール:
         //   1行目: URL
         //   2行目以降: フォームURLを1行に1件
@@ -254,6 +263,8 @@ final class FormStockStore
     /** @return array<string, mixed> */
     private function load(): array
     {
+        // forms.json が壊れている場合は空在庫として扱わず停止する。
+        // 空扱いにすると、本来available/usedだった情報が消え、フォーム再利用や誤った枯渇通知につながる。
         // 不正JSONは処理停止にする。
         // 壊れた forms.json を空扱いすると、在庫状態を誤認して通知漏れや誤補充につながる。
         if ($this->data !== null) {
