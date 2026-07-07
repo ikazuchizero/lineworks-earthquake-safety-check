@@ -28,7 +28,7 @@ php php/bin/check.php
 
 - `php/bin/check.php`: cron / タスクスケジューラから呼ぶ入口です。lock取得、設定読み込み、各Store/Client生成、`EarthquakeChecker` 実行を担当します。
 - `php/bin/setup_check.php`: 設定ファイル、秘密鍵ファイル、保存先ディレクトリ、フォーム在庫関連ディレクトリなどの準備状態を確認します。
-- `php/bin/connectivity_check.php`: LINE WORKS API への疎通と、検証用メッセージ送信を確認します。安否確認本文は送りません。
+- `php/bin/connectivity_check.php`: LINE WORKS API への疎通と、検証用メッセージ送信を確認します。通常の安否確認通知先へ送信し、`form_stock_enabled=true` の場合は保守通知先へも送信します。安否確認本文は送りません。
 - `php/bin/health_check.php`: アプリの状態ファイル、フォーム在庫、直近ログなどを確認し、必要に応じて保守通知を送ります。
 - `php/src/Config.php`: `config.php` の読み込みと必須設定の検証を担当します。`form_stock_enabled` の本番/テスト切り替えもここで検証します。
 - `php/src/EarthquakeChecker.php`: 地震取得後の通知対象抽出、重複判定、フォームURL解決、LINE WORKS送信、state/form更新順序を管理します。

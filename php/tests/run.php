@@ -687,16 +687,36 @@ function testConnectivityCheckerUsesShortTestMessage(): void
 {
     // 前提: 初回疎通チェックはLINE WORKSへ短いテスト文を送るだけで、安否確認本文ではありません。
     // 操作: FakeLineWorksClientでConnectivityCheckerを実行します。
-    // 期待: 保守通知先roomへ1件だけ送られ、地震通知本文に見える文言は含みません。
+    // 期待: 通常通知先と保守通知先へ1件ずつ送られ、地震通知本文に見える文言は含みません。
     // 防ぐ事故: 疎通確認が本物の安否確認通知と誤認され、利用者を混乱させること。
     $lineWorks = new FakeLineWorksClient();
     $checker = new ConnectivityChecker($lineWorks, 'maintenance-room-id');
 
     $checker->run();
 
-    assertTrue(count($lineWorks->messages) === 1, 'connectivity checker must send one test message.');
-    assertTrue($lineWorks->messages[0]['room_id'] === 'maintenance-room-id', 'connectivity checker must use the configured maintenance room.');
+    assertTrue(count($lineWorks->messages) === 2, 'connectivity checker must send test messages to both rooms.');
+    assertTrue($lineWorks->messages[0]['room_id'] === null, 'connectivity checker must check the normal notification room first.');
+    assertTrue($lineWorks->messages[1]['room_id'] === 'maintenance-room-id', 'connectivity checker must check the configured maintenance room.');
+    assertTrue(str_contains($lineWorks->messages[0]['text'], '通知用チャット疎通確認'), 'normal room connectivity message must identify the destination purpose.');
+    assertTrue(str_contains($lineWorks->messages[1]['text'], '保守通知用チャット疎通確認'), 'maintenance room connectivity message must identify the destination purpose.');
     assertTrue(!str_contains($lineWorks->messages[0]['text'], '【地震情報】'), 'connectivity checker must not send the earthquake safety message body.');
+    assertTrue(!str_contains($lineWorks->messages[1]['text'], '【地震情報】'), 'maintenance connectivity checker must not send the earthquake safety message body.');
+}
+
+function testConnectivityCheckerSkipsMaintenanceWhenRoomIsNull(): void
+{
+    // 前提: form_stock_enabled=false 相当では、保守通知先roomを使わない構成です。
+    // 操作: maintenanceRoomIdなしでConnectivityCheckerを実行します。
+    // 期待: 通常通知先だけに疎通確認を送り、保守通知先への送信は行いません。
+    // 防ぐ事故: 固定URL検証モードで、意図しない保守通知先チェックや二重送信を行うこと。
+    $lineWorks = new FakeLineWorksClient();
+    $checker = new ConnectivityChecker($lineWorks, null);
+
+    $checker->run();
+
+    assertTrue(count($lineWorks->messages) === 1, 'connectivity checker without maintenance room must send one test message.');
+    assertTrue($lineWorks->messages[0]['room_id'] === null, 'connectivity checker without maintenance room must only check the normal notification room.');
+    assertTrue(str_contains($lineWorks->messages[0]['text'], '通知用チャット疎通確認'), 'normal-only connectivity message must identify the destination purpose.');
 }
 
 function testFailureNotifierSuppressesRepeatedError(): void
@@ -785,6 +805,7 @@ $tests = [
     'setup checker skips form directories when stock disabled' => 'testSetupCheckerSkipsFormDirectoriesWhenStockDisabled',
     'setup checker not writable directory' => 'testSetupCheckerNotWritableDirectory',
     'connectivity checker uses short test message' => 'testConnectivityCheckerUsesShortTestMessage',
+    'connectivity checker skips maintenance when room is null' => 'testConnectivityCheckerSkipsMaintenanceWhenRoomIsNull',
     'failure notifier suppresses repeated error' => 'testFailureNotifierSuppressesRepeatedError',
     'failure notifier skips LINE WORKS error' => 'testFailureNotifierSkipsLineWorksError',
     'health checker summarizes log' => 'testHealthCheckerSummarizesLog',
