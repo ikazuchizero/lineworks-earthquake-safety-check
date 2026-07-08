@@ -18,7 +18,7 @@ try {
     $message = $healthChecker->message($summary);
 
     $lineWorksClient = new LineWorksClient($config);
-    $lineWorksClient->sendMessage($message, $config->formStockEnabled() ? $config->formLowStockRoomId() : null);
+    $lineWorksClient->sendMessage($message, $config->maintenanceRoomId());
 
     echo 'OK health_check' . PHP_EOL;
     exit(0);

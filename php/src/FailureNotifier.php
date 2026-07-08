@@ -9,10 +9,15 @@ final class FailureNotifier
 
     private LineWorksClient $lineWorksClient;
     private ErrorNotificationStore $store;
-    private ?string $roomId;
+    private string $roomId;
 
-    public function __construct(LineWorksClient $lineWorksClient, ErrorNotificationStore $store, ?string $roomId)
+    public function __construct(LineWorksClient $lineWorksClient, ErrorNotificationStore $store, string $roomId)
     {
+        $roomId = trim($roomId);
+        if ($roomId === '') {
+            throw new InvalidArgumentException('Failure notifier room ID is required.');
+        }
+
         $this->lineWorksClient = $lineWorksClient;
         $this->store = $store;
         $this->roomId = $roomId;
