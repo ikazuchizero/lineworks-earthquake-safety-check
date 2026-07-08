@@ -19,6 +19,10 @@ $GLOBALS['TEST_REGISTRY'] = [];
 
 function register_test(string $name, callable $test): void
 {
+    if (isset($GLOBALS['TEST_REGISTRY'][$name])) {
+        throw new RuntimeException('Duplicate test name: ' . $name);
+    }
+
     $GLOBALS['TEST_REGISTRY'][$name] = $test;
 }
 
@@ -82,13 +86,13 @@ function tempDir(): string
     return $dir;
 }
 
-/** @param array<string, mixed> $overrides */
-function writeConfig(string $dir, array $overrides = []): string
+/** @return array<string, mixed> */
+function defaultConfigValues(string $dir): array
 {
     $privateKeyPath = $dir . '/private.key';
     file_put_contents($privateKeyPath, 'dummy-key');
 
-    $config = array_merge([
+    return [
         'notify_scale' => 45,
         'unknown_hypocenter_hold_seconds' => 600,
         'p2pquake_api_url' => 'https://example.invalid/quake',
@@ -107,12 +111,22 @@ function writeConfig(string $dir, array $overrides = []): string
         'form_import_failed_dir' => $dir . '/failed',
         'form_low_stock_threshold' => 10,
         'form_low_stock_room_id' => 'maintenance-room-id',
-    ], $overrides);
+    ];
+}
 
+/** @param array<string, mixed> $values */
+function writeConfigValues(string $dir, array $values): string
+{
     $path = $dir . '/config.php';
-    file_put_contents($path, '<?php return ' . var_export($config, true) . ';' . PHP_EOL);
+    file_put_contents($path, '<?php return ' . var_export($values, true) . ';' . PHP_EOL);
 
     return $path;
+}
+
+/** @param array<string, mixed> $overrides */
+function writeConfig(string $dir, array $overrides = []): string
+{
+    return writeConfigValues($dir, array_merge(defaultConfigValues($dir), $overrides));
 }
 
 function createRuntimeDirs(string $dir): void

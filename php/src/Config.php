@@ -88,6 +88,7 @@ final class Config
             throw new RuntimeException('Config file must return an array.');
         }
 
+        self::requireNumeric($values, 'notify_scale');
         self::requireIntegerIfPresent($values, 'notify_scale');
         self::requireIntegerIfPresent($values, 'unknown_hypocenter_hold_seconds');
         self::requireBooleanIfPresent($values, 'form_stock_enabled');

@@ -9,6 +9,20 @@ register_test('notify_scale validation', static function (): void {
     expectConfigFailure(['notify_scale' => 999], 'unknown notify_scale must fail.');
 });
 
+register_test('notify_scale is required', static function (): void {
+    $dir = tempDir();
+    $values = defaultConfigValues($dir);
+    unset($values['notify_scale']);
+
+    try {
+        Config::load(writeConfigValues($dir, $values));
+    } catch (RuntimeException) {
+        return;
+    }
+
+    throw new RuntimeException('missing notify_scale must fail.');
+});
+
 register_test('placeholder validation', static function (): void {
     expectConfigFailure(
         ['form_low_stock_room_id' => 'REPLACE_WITH_FORM_LOW_STOCK_ROOM_ID'],
