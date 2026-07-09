@@ -1,0 +1,205 @@
+<?php
+declare(strict_types=1);
+
+class LineWorksClient
+{
+    // LINE WORKS APIとの通信だけを担当する。
+    // 呼び出し側は「例外が出なければ送信成功」と判断し、その後にstate/formsを確定する。
+    // token・secret・JWT・room_id・bot_idはログや例外本文に含めない。
+    // LINE WORKS APIとの通信だけを担当するクラス。
+    // 呼び出し側は「送れたか/失敗したか」だけを見て、stateやフォーム消費の確定判断を行う。
+    private Config $config;
+
+    public function __construct(Config $config)
+    {
+        $this->config = $config;
+    }
+
+    public function sendMessage(string $text, ?string $roomId = null): void
+    {
+        // roomId を任意指定できるのは、安否確認通知先と保守通知先を分けるため。
+        // 未指定なら通常の安否確認通知先へ送る。
+        // roomId を任意指定できるようにしているのは、安否確認通知先と
+        // フォーム補充・枯渇通知先を分けるため。未指定なら通常の room_id に送る。
+        $accessToken = $this->getAccessToken();
+        $botId = rawurlencode($this->config->botId());
+        $targetRoomId = rawurlencode($roomId ?? $this->config->roomId());
+        $url = 'https://www.worksapis.com/v1.0/bots/' . $botId . '/channels/' . $targetRoomId . '/messages';
+
+        $payload = json_encode([
+            'content' => [
+                'type' => 'text',
+                'text' => $text,
+            ],
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        if ($payload === false) {
+            throw new RuntimeException('Failed to encode LINE WORKS message JSON.');
+        }
+
+        $headers = [];
+        $body = $this->request('POST', $url, [
+            'Authorization' => 'Bearer ' . $accessToken,
+            'Content-Type' => 'application/json',
+        ], $payload, $headers);
+        $statusCode = $this->statusCodeFromHeaders($headers);
+
+        // 送信失敗時は必ず例外にする。
+        // 呼び出し側がstate保存やフォームused化を行わないようにするため。
+        if ($statusCode < 200 || $statusCode >= 300) {
+            throw new RuntimeException('LINE WORKS message send failed. HTTP status: ' . $statusCode);
+        }
+    }
+
+    private function getAccessToken(): string
+    {
+        // JWT Bearerでアクセストークンを取得する。
+        // レスポンスbodyには詳細情報が含まれる可能性があるため、失敗時もHTTP statusだけを例外へ残す。
+        // Bot送信の前にJWT Bearerでアクセストークンを取得する。
+        // token / client_secret / assertion は秘密情報なので、ログには出さない。
+        $jwt = $this->createJwt();
+
+        $payload = http_build_query([
+            'grant_type' => 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+            'assertion' => $jwt,
+            'client_id' => $this->config->clientId(),
+            'client_secret' => $this->config->clientSecret(),
+            'scope' => 'bot.message',
+        ]);
+
+        $headers = [];
+        $body = $this->request('POST', $this->config->lineWorksTokenUrl(), [
+            'Content-Type' => 'application/x-www-form-urlencoded',
+        ], $payload, $headers);
+        $statusCode = $this->statusCodeFromHeaders($headers);
+
+        $json = json_decode($body, true);
+
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            throw new RuntimeException('LINE WORKS token JSON parse failed: ' . json_last_error_msg());
+        }
+
+        if ($statusCode !== 200 || !is_array($json) || empty($json['access_token'])) {
+            throw new RuntimeException('LINE WORKS token request failed. HTTP status: ' . $statusCode);
+        }
+
+        return (string) $json['access_token'];
+    }
+
+    private function createJwt(): string
+    {
+        // private keyで署名したJWTを作る。
+        // 署名材料やJWT本文は秘匿情報なので、デバッグ出力やログには絶対に出さない。
+        // JWT署名には private key を使う。鍵の中身は絶対にログ・標準出力へ出さない。
+        // 署名できない場合は送信を続けず、呼び出し側に例外として返す。
+        if (!function_exists('openssl_sign')) {
+            throw new RuntimeException('OpenSSL extension is required to sign LINE WORKS JWT.');
+        }
+
+        $privateKey = file_get_contents($this->config->privateKeyPath());
+
+        if ($privateKey === false || trim($privateKey) === '') {
+            throw new RuntimeException('Private key file is empty or unreadable.');
+        }
+
+        $now = time();
+        $header = [
+            'alg' => 'RS256',
+            'typ' => 'JWT',
+        ];
+        $payload = [
+            'iss' => $this->config->clientId(),
+            'sub' => $this->config->serviceAccount(),
+            'iat' => $now,
+            'exp' => $now + 3600,
+            'aud' => $this->config->lineWorksTokenUrl(),
+        ];
+
+        $encodedHeader = $this->base64UrlEncode($this->jsonEncode($header));
+        $encodedPayload = $this->base64UrlEncode($this->jsonEncode($payload));
+        $signatureInput = $encodedHeader . '.' . $encodedPayload;
+
+        $signature = '';
+        if (!openssl_sign($signatureInput, $signature, $privateKey, OPENSSL_ALGO_SHA256)) {
+            throw new RuntimeException('Failed to sign LINE WORKS JWT.');
+        }
+
+        return $signatureInput . '.' . $this->base64UrlEncode($signature);
+    }
+
+    /** @param array<string, mixed> $data */
+    private function jsonEncode(array $data): string
+    {
+        $json = json_encode($data, JSON_UNESCAPED_SLASHES);
+
+        if ($json === false) {
+            throw new RuntimeException('Failed to encode JWT JSON.');
+        }
+
+        return $json;
+    }
+
+    private function base64UrlEncode(string $value): string
+    {
+        return rtrim(strtr(base64_encode($value), '+/', '-_'), '=');
+    }
+
+    /**
+     * @param array<string, string> $requestHeaders
+     * @param array<int, string> $responseHeaders
+     */
+    private function request(string $method, string $url, array $requestHeaders, string $body, array &$responseHeaders): string
+    {
+        // PHP標準関数だけでHTTP送信する。外部ライブラリは使わない方針。
+        // ignore_errors=true により4xx/5xxでも本文を受け取り、呼び出し側でHTTPステータス判定する。
+        $options = [
+            'http' => [
+                'method' => $method,
+                'header' => $this->formatHeaders($requestHeaders),
+                'content' => $body,
+                'ignore_errors' => true,
+                'timeout' => 20,
+            ],
+        ];
+
+        $context = stream_context_create($options);
+        $response = @file_get_contents($url, false, $context);
+        $responseHeaders = $http_response_header ?? [];
+
+        if ($response === false) {
+            // error_get_last() には送信先URLやHTTPヘッダー由来の情報が含まれる可能性がある。
+            // room_id、bot_id、tokenなどをcronメールやapp.logへ流さないため、詳細は出さない。
+            throw new RuntimeException('LINE WORKS HTTP request failed.');
+        }
+
+        return $response;
+    }
+
+    /** @param array<string, string> $headers */
+    private function formatHeaders(array $headers): string
+    {
+        $lines = [];
+        foreach ($headers as $name => $value) {
+            $lines[] = $name . ': ' . $value;
+        }
+
+        return implode("\r\n", $lines);
+    }
+
+    /** @param array<int, string> $headers */
+    private function statusCodeFromHeaders(array $headers): int
+    {
+        // 100 Continue やリダイレクトなどでHTTPステータス行が複数ある場合は最後の行を採用する。
+        // 最終レスポンスのstatusで成功/失敗を判定するため、途中のHTTP行でreturnしない。
+        // file_get_contents のHTTPヘッダーから 200/400 などを取り出す。
+        // ここが壊れると成功レスポンスも失敗扱いになるため、正規表現を安易に変えない。
+        $statusCode = 0;
+        foreach ($headers as $header) {
+            if (preg_match('#^HTTP/\S+\s+(\d{3})#', $header, $matches)) {
+                $statusCode = (int) $matches[1];
+            }
+        }
+
+        return $statusCode;
+    }
+}
