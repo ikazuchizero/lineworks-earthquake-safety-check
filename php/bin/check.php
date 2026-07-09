@@ -85,7 +85,7 @@ try {
             $failureNotifier = new FailureNotifier(
                 $lineWorksClient,
                 new ErrorNotificationStore($storageDir . '/error_notifications.json'),
-                $config->formStockEnabled() ? $config->formLowStockRoomId() : null
+                $config->maintenanceRoomId()
             );
             $failureNotifier->notify($e, 'check_failed');
         } catch (Throwable $notifyError) {
