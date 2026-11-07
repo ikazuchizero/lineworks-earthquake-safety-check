@@ -14,6 +14,11 @@ return [
     // デフォルトは600秒。短すぎるとUNKNOWNで先に通知され、長すぎると安否確認が遅れる。
     'unknown_hypocenter_hold_seconds' => 600,
 
+    // 全体向け地震通知を保留する時間帯。開始を含み、終了を含まない。
+    // 0-6 は0時から6時まで。開始が終了より大きい場合は日跨ぎ。
+    'quiet_hours_start' => 0,
+    'quiet_hours_end' => 6,
+
     // P2PQuakeの取得先。php/bin/check.php では limit=10 で取得する。
     // 最新1件だけを見ると、対象外の続報で通知対象地震を見落とす可能性がある。
     'p2pquake_api_url' => 'https://api.p2pquake.net/v2/jma/quake',
@@ -34,33 +39,11 @@ return [
     // ここにはファイルパスだけを書く。
     'private_key_path' => __DIR__ . '/secrets/private.key',
 
-    // フォームストックを使うかどうか。
-    // true が本番推奨。forms.json の available URLを1回だけ使い、送信成功後に used にする。
-    // false はローカル/テスト専用。forms.json/forms.csvを使わず、下の form_url を固定で使う。
-    // false を本番で使うと同じフォームURLを使い回すため、回答が混ざる事故につながる。
-    'form_stock_enabled' => true,
-
-    // form_stock_enabled=false のテスト時だけ使う固定フォームURL。
-    // 本番では fallback として使わない。実URLは php/config.php にだけ書く。
-    'form_url' => '',
-
-    // フォームURL在庫の保存先。実運用データの forms.json はGitへ入れない。
-    // available のフォームURLは、LINE WORKS送信成功後にだけ used へ変わる。
-    'form_stock_path' => __DIR__ . '/storage/forms.json',
-
-    // フォームURL補充CSVの取り込み先。非エンジニア担当者が触りやすいよう、内部状態用の storage/ ではなく php/forms/ を使う。
-    // 1行目を URL、2行目以降をフォームURLにした forms.csv を php/forms/ に配置する。
-    // 成功したCSVは php/forms/processed/、失敗したCSVは php/forms/failed/ へ移動する。
-    'form_import_csv_path' => __DIR__ . '/forms/forms.csv',
-    'form_import_processed_dir' => __DIR__ . '/forms/processed',
-    'form_import_failed_dir' => __DIR__ . '/forms/failed',
-
-    // 低在庫通知のしきい値。判定は「以下」。
-    // 10なら、フォーム消費後の残数が10件以下になったとき補充通知する。
-    'form_low_stock_threshold' => 10,
-
-    // フォーム補充・枯渇通知を送るメンテナンス用チャットルーム。
-    // 安否確認通知先の room_id とは別にすること。
-    // Botがこのroomにも参加していないと、在庫不足に気づけない。
-    'form_low_stock_room_id' => 'REPLACE_WITH_FORM_LOW_STOCK_ROOM_ID',
+    // 個人GoogleアカウントのユーザーOAuth offline refresh tokenを使う。
+    // Google側はサービスアカウントではない。実値はGit管理外の config.php にだけ置く。
+    // publishSettings対応のテンプレートが必要。匿名回答では確認済みメール収集を無効にする。
+    'google_oauth_client_id' => 'REPLACE_WITH_GOOGLE_OAUTH_CLIENT_ID',
+    'google_oauth_client_secret' => 'REPLACE_WITH_GOOGLE_OAUTH_CLIENT_SECRET',
+    'google_oauth_refresh_token' => 'REPLACE_WITH_GOOGLE_OAUTH_REFRESH_TOKEN',
+    'google_forms_template_id' => 'REPLACE_WITH_GOOGLE_FORM_TEMPLATE_ID',
 ];

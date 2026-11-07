@@ -44,17 +44,6 @@ final class SetupChecker
         $results[] = $this->checkFileReadable('private_key_file', $config->privateKeyPath(), true);
         $results[] = $this->checkDirectoryWritable('state_dir', dirname($this->rootDir . '/storage/state.json'));
 
-        if ($config->formStockEnabled()) {
-            // フォームストック運用では、補充CSVの配置先・処理済み/失敗CSVの移動先・
-            // forms.json の保存先が揃っていないと、補充失敗やフォーム再利用事故につながる。
-            $results[] = $this->checkDirectoryWritable('forms_dir', $this->rootDir . '/forms');
-            $results[] = $this->checkDirectoryWritable('form_processed_dir', $config->formImportProcessedDir());
-            $results[] = $this->checkDirectoryWritable('form_failed_dir', $config->formImportFailedDir());
-            $results[] = $this->checkDirectoryWritable('form_stock_dir', dirname($config->formStockPath()));
-        }
-
-        // form_stock_enabled=false は検証用の固定form_urlモード。
-        // Config::load() が固定URLの妥当性を検証済みなので、forms系ディレクトリは必須扱いしない。
         return $results;
     }
 
@@ -74,7 +63,7 @@ final class SetupChecker
             'php_src_LineWorksClient' => 'src/LineWorksClient.php',
             'php_src_P2PQuakeClient' => 'src/P2PQuakeClient.php',
             'php_src_StateStore' => 'src/StateStore.php',
-            'php_src_FormStockStore' => 'src/FormStockStore.php',
+            'php_src_GoogleFormsClient' => 'src/GoogleFormsClient.php',
             'php_src_SetupChecker' => 'src/SetupChecker.php',
             'php_src_ConnectivityChecker' => 'src/ConnectivityChecker.php',
             'php_src_HealthChecker' => 'src/HealthChecker.php',

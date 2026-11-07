@@ -4,7 +4,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/../src/Config.php';
 require_once __DIR__ . '/../src/Logger.php';
 require_once __DIR__ . '/../src/StateStore.php';
-require_once __DIR__ . '/../src/FormStockStore.php';
+require_once __DIR__ . '/../src/GoogleFormsClient.php';
 require_once __DIR__ . '/../src/P2PQuakeClient.php';
 require_once __DIR__ . '/../src/LineWorksClient.php';
 require_once __DIR__ . '/../src/EarthquakeChecker.php';
@@ -50,7 +50,10 @@ final class FakeLineWorksClient extends LineWorksClient
 {
     /** @var array<int, array{room_id: string|null, text: string}> */
     public array $messages = [];
+    /** @var array<int, array{room_id: string|null, text: string}> */
+    public array $attempts = [];
     public bool $failMaintenance = false;
+    public bool $failMain = false;
 
     public function __construct()
     {
@@ -58,14 +61,20 @@ final class FakeLineWorksClient extends LineWorksClient
 
     public function sendMessage(string $text, ?string $roomId = null): void
     {
-        $this->messages[] = [
+        $message = [
             'room_id' => $roomId,
             'text' => $text,
         ];
+        $this->attempts[] = $message;
 
         if ($this->failMaintenance && $roomId !== null) {
             throw new RuntimeException('fake maintenance send failure');
         }
+        if ($this->failMain && $roomId === null) {
+            throw new RuntimeException('fake main send failure');
+        }
+
+        $this->messages[] = $message;
     }
 }
 
@@ -103,14 +112,10 @@ function defaultConfigValues(string $dir): array
         'bot_id' => 'bot-id',
         'room_id' => 'room-id',
         'private_key_path' => $privateKeyPath,
-        'form_stock_enabled' => true,
-        'form_url' => '',
-        'form_stock_path' => $dir . '/forms.json',
-        'form_import_csv_path' => $dir . '/forms.csv',
-        'form_import_processed_dir' => $dir . '/processed',
-        'form_import_failed_dir' => $dir . '/failed',
-        'form_low_stock_threshold' => 10,
-        'form_low_stock_room_id' => 'maintenance-room-id',
+        'google_oauth_client_id' => 'test-google-client',
+        'google_oauth_client_secret' => 'test-google-secret',
+        'google_oauth_refresh_token' => 'test-google-refresh',
+        'google_forms_template_id' => 'template-id',
     ];
 }
 
@@ -133,9 +138,6 @@ function createRuntimeDirs(string $dir): void
 {
     foreach ([
         $dir . '/storage',
-        $dir . '/forms',
-        $dir . '/processed',
-        $dir . '/failed',
     ] as $path) {
         if (!is_dir($path) && !mkdir($path, 0775, true)) {
             throw new RuntimeException('Failed to create runtime test directory.');
@@ -156,7 +158,7 @@ function requiredPhpFileFixtures(): array
         'src/LineWorksClient.php' => '<?php class LineWorksClientFixture {}' . PHP_EOL,
         'src/P2PQuakeClient.php' => '<?php class P2PQuakeClientFixture {}' . PHP_EOL,
         'src/StateStore.php' => '<?php class StateStoreFixture {}' . PHP_EOL,
-        'src/FormStockStore.php' => '<?php class FormStockStoreFixture {}' . PHP_EOL,
+        'src/GoogleFormsClient.php' => '<?php class GoogleFormsClientFixture {}' . PHP_EOL,
         'src/SetupChecker.php' => '<?php class SetupCheckerFixture {}' . PHP_EOL,
         'src/ConnectivityChecker.php' => '<?php class ConnectivityCheckerFixture {}' . PHP_EOL,
         'src/HealthChecker.php' => '<?php class HealthCheckerFixture {}' . PHP_EOL,
@@ -228,13 +230,13 @@ function unknownEarthquakeEvent(string $id = 'unknown-event-1', string $time = '
 }
 
 /** @return array<string, mixed> */
-function namedEarthquakeEvent(string $id = 'named-event-1', string $time = '2026-07-05T12:00:00', string $name = 'Named Hypocenter'): array
+function namedEarthquakeEvent(string $id = 'named-event-1', string $time = '2026-07-05T12:00:00', string $name = 'Named Hypocenter', int $maxScale = 45): array
 {
     return [
         'id' => $id,
         'earthquake' => [
             'time' => $time,
-            'maxScale' => 45,
+            'maxScale' => $maxScale,
             'hypocenter' => [
                 'name' => $name,
             ],
@@ -243,24 +245,19 @@ function namedEarthquakeEvent(string $id = 'named-event-1', string $time = '2026
 }
 
 /** @param array<int, array<string, mixed>>|null $events */
-function buildChecker(string $dir, FakeLineWorksClient $lineWorks, ?array $events = null): EarthquakeChecker
+function buildChecker(string $dir, FakeLineWorksClient $lineWorks, ?array $events = null, array $configOverrides = [], ?GoogleFormsClient $googleFormsClient = null, ?DateTimeImmutable $now = null): EarthquakeChecker
 {
-    $config = Config::load(writeConfig($dir));
+    $config = Config::load(writeConfig($dir, $configOverrides));
     $stateStore = new StateStore($dir . '/state.json');
-    $formStockStore = new FormStockStore(
-        $dir . '/forms.json',
-        $dir . '/forms.csv',
-        $dir . '/processed',
-        $dir . '/failed'
-    );
 
     return new EarthquakeChecker(
         $config,
         new FakeP2PQuakeClient($events ?? [earthquakeEvent()]),
         $lineWorks,
         $stateStore,
-        $formStockStore,
-        new Logger($dir . '/app.log')
+        new Logger($dir . '/app.log'),
+        $googleFormsClient ?? googleClientForTest($config),
+        $now
     );
 }
 
@@ -279,23 +276,25 @@ function writeState(string $dir, array $state): void
     file_put_contents($dir . '/state.json', json_encode($state, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT) . PHP_EOL);
 }
 
-function writeAvailableForms(string $dir, int $count = 1): void
+function googleClientForTest(Config $config): GoogleFormsClient
 {
-    $forms = [];
-    for ($i = 1; $i <= $count; $i++) {
-        $forms[] = [
-            'url' => 'https://example.invalid/form/' . $i,
-            'status' => 'available',
-            'imported_at' => gmdate('c'),
-            'used_at' => null,
-            'dedupe_key' => null,
-        ];
-    }
-
-    file_put_contents($dir . '/forms.json', json_encode([
-        'forms' => $forms,
-        'low_stock_notified' => false,
-    ], JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT) . PHP_EOL);
+    return new GoogleFormsClient($config, static function (string $method, string $url, array $headers, string $body): array {
+        if ($url === 'https://oauth2.googleapis.com/token') {
+            $response = ['access_token' => 'synthetic-token'];
+        } elseif ($method === 'POST' && str_contains($url, '/copy?')) {
+            $response = ['id' => 'synthetic-copy-' . bin2hex(random_bytes(4))];
+        } elseif ($method === 'GET' && str_starts_with($url, 'https://forms.googleapis.com/v1/forms/')) {
+            $response = [
+                'publishSettings' => ['publishState' => ['isPublished' => true, 'isAcceptingResponses' => true]],
+                'responderUri' => 'https://respond.invalid/' . basename((string) parse_url($url, PHP_URL_PATH)),
+            ];
+        } elseif ($method === 'GET' && str_contains($url, '/permissions?')) {
+            $response = ['permissions' => [['id' => 'synthetic-acl', 'type' => 'anyone', 'role' => 'reader', 'view' => 'published', 'allowFileDiscovery' => false]]];
+        } else {
+            throw new RuntimeException('Unexpected synthetic Google request.');
+        }
+        return ['status' => 200, 'body' => json_encode($response) ?: '{}'];
+    });
 }
 
 function mainMessageCount(FakeLineWorksClient $lineWorks): int

@@ -47,7 +47,7 @@ final class HealthChecker
                 continue;
             }
 
-            if (str_contains($line, ' WARNING ') || str_contains($line, 'skipped_due_to_form_stock_out') || str_contains($line, 'form_low_stock_notice_sent')) {
+            if (str_contains($line, ' WARNING ')) {
                 $summary['warning']++;
                 continue;
             }

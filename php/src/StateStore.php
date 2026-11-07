@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 final class StateStore
 {
-    // state.json は通知済み・UNKNOWN保留・フォーム枯渇skip・平時リマインドをまとめて保持する。
+    // state.json は通知済み・UNKNOWN保留・静穏バッチ・Googleフォーム準備状態をまとめて保持する。
     // ここを空扱いで進めると、過去の通知済み情報が消えた扱いになり二重通知につながる。
     // state.json は「どの地震を通知済みにしたか」と、UNKNOWN震源地の保留状態を保持する。
     // dedupe_keyだけでなく earthquake_time 単位でも通知済みを見て、UNKNOWN→震源地あり続報の二重通知を防ぐ。
@@ -31,65 +31,6 @@ final class StateStore
         return isset($state['notified_by_earthquake_time'][$earthquakeTime]);
     }
 
-    public function hasSkippedDueToFormStockOut(string $dedupeKey): bool
-    {
-        $state = $this->load();
-
-        return isset($state['skipped_due_to_form_stock_out'][$dedupeKey]);
-    }
-
-    public function hasSkippedDueToFormStockOutEarthquakeTime(string $earthquakeTime): bool
-    {
-        $state = $this->load();
-
-        return isset($state['skipped_due_to_form_stock_out_by_earthquake_time'][$earthquakeTime]);
-    }
-
-    /** @return array<string, mixed>|null */
-    public function skippedDueToFormStockOutRecord(string $dedupeKey, string $earthquakeTime): ?array
-    {
-        $state = $this->load();
-
-        $record = $state['skipped_due_to_form_stock_out'][$dedupeKey] ?? null;
-        if (is_array($record)) {
-            return $record;
-        }
-
-        $index = $state['skipped_due_to_form_stock_out_by_earthquake_time'][$earthquakeTime] ?? null;
-        if (!is_array($index)) {
-            return null;
-        }
-
-        $indexedDedupeKey = (string) ($index['dedupe_key'] ?? '');
-        $record = $state['skipped_due_to_form_stock_out'][$indexedDedupeKey] ?? null;
-
-        return is_array($record) ? $record : null;
-    }
-
-    /** @return array<string, array<string, mixed>> */
-    public function stockOutNoticeRetryRecords(): array
-    {
-        // フォーム枯渇で安否確認本文を送れなかった地震のうち、
-        // 管理通知が未達のものだけを返す。P2PQuakeの最新取得結果から消えた後でも再試行するため。
-        $state = $this->load();
-        $records = [];
-
-        foreach ($state['skipped_due_to_form_stock_out'] as $dedupeKey => $record) {
-            if (!is_string($dedupeKey) || !is_array($record)) {
-                continue;
-            }
-
-            $noticeStatus = (string) ($record['notice_status'] ?? 'sent');
-            if ($noticeStatus !== 'pending' && $noticeStatus !== 'failed') {
-                continue;
-            }
-
-            $records[$dedupeKey] = $record;
-        }
-
-        return $records;
-    }
-
     /** @param array<string, mixed> $record */
     public function markNotified(string $dedupeKey, array $record): void
     {
@@ -106,87 +47,6 @@ final class StateStore
         // UNKNOWNで通知した後に震源地あり続報が来ても、同じ発生時刻なら再通知しないための索引。
         $this->load();
         $this->state['notified_by_earthquake_time'][$earthquakeTime] = $record;
-    }
-
-    /** @param array<string, mixed> $record */
-    public function markSkippedDueToFormStockOut(string $dedupeKey, array $record): void
-    {
-        // フォーム枯渇で送れなかった地震は、正常送信済みの notified とは分けて保存する。
-        // 補充後にbotが同じ地震を後追い自動送信しないよう、earthquake_time でも抑止する。
-        $this->load();
-        $record['dedupe_key'] = $dedupeKey;
-        $this->state['skipped_due_to_form_stock_out'][$dedupeKey] = $record;
-
-        $earthquakeTime = trim((string) ($record['earthquake_time'] ?? ''));
-        if ($earthquakeTime !== '') {
-            $this->state['skipped_due_to_form_stock_out_by_earthquake_time'][$earthquakeTime] = [
-                'dedupe_key' => $dedupeKey,
-                'skipped_at' => (string) ($record['skipped_at'] ?? ''),
-                'reason' => (string) ($record['reason'] ?? 'form_stock_out'),
-                'notice_status' => (string) ($record['notice_status'] ?? 'pending'),
-                'notice_last_attempted_at' => $record['notice_last_attempted_at'] ?? null,
-                'notice_sent_at' => $record['notice_sent_at'] ?? null,
-            ];
-        }
-    }
-
-    public function markStockOutNoticeResult(string $dedupeKey, string $status, ?string $error = null): void
-    {
-        // 対象地震ありのフォーム枯渇管理通知の到達状態を更新する。
-        // sent になったものは再通知せず、failed/pending は後続cronで管理通知だけ再試行する。
-        $this->load();
-
-        if (!isset($this->state['skipped_due_to_form_stock_out'][$dedupeKey]) || !is_array($this->state['skipped_due_to_form_stock_out'][$dedupeKey])) {
-            throw new RuntimeException('Stock out skipped record not found.');
-        }
-
-        $now = gmdate('c');
-        $record = &$this->state['skipped_due_to_form_stock_out'][$dedupeKey];
-        $record['notice_status'] = $status;
-        $record['notice_last_attempted_at'] = $now;
-
-        if ($status === 'sent') {
-            $record['notice_sent_at'] = $now;
-            $record['notice_error'] = null;
-        } elseif ($status === 'failed') {
-            $record['notice_error'] = $error;
-            if (!array_key_exists('notice_sent_at', $record)) {
-                $record['notice_sent_at'] = null;
-            }
-        }
-
-        $earthquakeTime = trim((string) ($record['earthquake_time'] ?? ''));
-        if ($earthquakeTime !== '' && isset($this->state['skipped_due_to_form_stock_out_by_earthquake_time'][$earthquakeTime])) {
-            $this->state['skipped_due_to_form_stock_out_by_earthquake_time'][$earthquakeTime]['notice_status'] = $status;
-            $this->state['skipped_due_to_form_stock_out_by_earthquake_time'][$earthquakeTime]['notice_last_attempted_at'] = $now;
-            $this->state['skipped_due_to_form_stock_out_by_earthquake_time'][$earthquakeTime]['notice_sent_at'] = $record['notice_sent_at'] ?? null;
-        }
-    }
-
-    public function stockOutReminderLastAlertedAt(): ?string
-    {
-        $state = $this->load();
-        $value = $state['last_empty_stock_reminded_at'] ?? ($state['stock_out_reminder']['last_alerted_at'] ?? null);
-
-        return is_string($value) && $value !== '' ? $value : null;
-    }
-
-    public function markStockOutReminderAlerted(string $alertedAt): void
-    {
-        // 対象地震がない平時の在庫0件リマインドだけを6時間単位で抑止する。
-        // 対象地震を送れなかった場合の枯渇通知とは別状態として扱う。
-        $this->load();
-        $this->state['last_empty_stock_reminded_at'] = $alertedAt;
-        $this->state['stock_out_reminder']['last_alerted_at'] = $alertedAt;
-    }
-
-    public function clearStockOutReminderAlerted(): void
-    {
-        // 平時リマインドは在庫が回復したら抑止状態を解除する。
-        // 次に0件へ落ちたとき、古い通知時刻のせいで必要なリマインドが抑止されないようにするため。
-        $this->load();
-        $this->state['last_empty_stock_reminded_at'] = null;
-        $this->state['stock_out_reminder']['last_alerted_at'] = null;
     }
 
     /** @return array<string, mixed>|null */
@@ -219,17 +79,65 @@ final class StateStore
     public function markPendingUnknown(string $earthquakeTime, array $record): void
     {
         // UNKNOWN震源地は即通知せず、一定時間だけ震源地名ありの続報を待つ。
-        // pending保存だけではフォームURLを消費しない。
+        // pending保存だけではGoogleフォームを複製しない。
         $this->load();
         $this->state['pending_unknown_by_earthquake_time'][$earthquakeTime] = $record;
     }
 
     public function removePendingUnknown(string $earthquakeTime): void
     {
-        // UNKNOWN保留は、通知済み・フォーム枯渇skip・壊れたrecord掃除などで不要になった時点で消す。
+        // UNKNOWN保留は、通知済み・壊れたrecord掃除などで不要になった時点で消す。
         // 呼び出し側は、この削除を永続化するために必要なら save() する。
         $this->load();
         unset($this->state['pending_unknown_by_earthquake_time'][$earthquakeTime]);
+    }
+
+    /** @return array<string, mixed>|null */
+    public function quietBatch(): ?array
+    {
+        $batch = $this->load()['quiet_batch'] ?? null;
+
+        return is_array($batch) ? $batch : null;
+    }
+
+    /** @param array<string, mixed> $batch */
+    public function setQuietBatch(array $batch): void
+    {
+        $this->load();
+        $this->state['quiet_batch'] = $batch;
+    }
+
+    public function clearQuietBatch(): void
+    {
+        $this->load();
+        $this->state['quiet_batch'] = null;
+    }
+
+    public function quietCompletedThrough(): ?string
+    {
+        $value = $this->load()['quiet_completed_through'] ?? null;
+
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    public function markQuietCompletedThrough(string $value): void
+    {
+        $this->load();
+        $this->state['quiet_completed_through'] = $value;
+    }
+
+    /** @return array<string, mixed>|null */
+    public function googleFormForEarthquakeTime(string $earthquakeTime): ?array
+    {
+        $record = $this->load()['google_forms_by_earthquake_time'][$earthquakeTime] ?? null;
+        return is_array($record) ? $record : null;
+    }
+
+    /** @param array<string, mixed> $record */
+    public function saveGoogleFormForEarthquakeTime(string $earthquakeTime, array $record): void
+    {
+        $this->load();
+        $this->state['google_forms_by_earthquake_time'][$earthquakeTime] = $record;
     }
 
     public function save(): void
@@ -300,22 +208,15 @@ final class StateStore
             $state['pending_unknown_by_earthquake_time'] = [];
         }
 
-        if (!isset($state['skipped_due_to_form_stock_out']) || !is_array($state['skipped_due_to_form_stock_out'])) {
-            $state['skipped_due_to_form_stock_out'] = [];
+        if (!array_key_exists('quiet_batch', $state) || ($state['quiet_batch'] !== null && !is_array($state['quiet_batch']))) {
+            $state['quiet_batch'] = null;
+        }
+        if (!array_key_exists('quiet_completed_through', $state) || !is_string($state['quiet_completed_through'])) {
+            $state['quiet_completed_through'] = null;
         }
 
-        if (!isset($state['skipped_due_to_form_stock_out_by_earthquake_time']) || !is_array($state['skipped_due_to_form_stock_out_by_earthquake_time'])) {
-            $state['skipped_due_to_form_stock_out_by_earthquake_time'] = [];
-        }
-
-        if (!isset($state['stock_out_reminder']) || !is_array($state['stock_out_reminder'])) {
-            $state['stock_out_reminder'] = [
-                'last_alerted_at' => null,
-            ];
-        }
-
-        if (!array_key_exists('last_empty_stock_reminded_at', $state)) {
-            $state['last_empty_stock_reminded_at'] = $state['stock_out_reminder']['last_alerted_at'] ?? null;
+        if (!isset($state['google_forms_by_earthquake_time']) || !is_array($state['google_forms_by_earthquake_time'])) {
+            $state['google_forms_by_earthquake_time'] = [];
         }
 
         // Backfill earthquake_time index from existing notified records.
@@ -352,12 +253,9 @@ final class StateStore
             'notified' => [],
             'notified_by_earthquake_time' => [],
             'pending_unknown_by_earthquake_time' => [],
-            'skipped_due_to_form_stock_out' => [],
-            'skipped_due_to_form_stock_out_by_earthquake_time' => [],
-            'stock_out_reminder' => [
-                'last_alerted_at' => null,
-            ],
-            'last_empty_stock_reminded_at' => null,
+            'quiet_batch' => null,
+            'quiet_completed_through' => null,
+            'google_forms_by_earthquake_time' => [],
         ];
     }
 }

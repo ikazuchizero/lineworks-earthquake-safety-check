@@ -15,7 +15,8 @@ try {
     $lineWorksClient = new LineWorksClient($config);
     $checker = new ConnectivityChecker(
         $lineWorksClient,
-        $config->formStockEnabled() ? $config->formLowStockRoomId() : null
+        $config->quietHoursStart(),
+        $config->quietHoursEnd()
     );
     $checker->run();
     echo 'OK connectivity_check' . PHP_EOL;

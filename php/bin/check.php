@@ -5,7 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/../src/Config.php';
 require_once __DIR__ . '/../src/Logger.php';
 require_once __DIR__ . '/../src/StateStore.php';
-require_once __DIR__ . '/../src/FormStockStore.php';
+require_once __DIR__ . '/../src/GoogleFormsClient.php';
 require_once __DIR__ . '/../src/P2PQuakeClient.php';
 require_once __DIR__ . '/../src/LineWorksClient.php';
 require_once __DIR__ . '/../src/EarthquakeChecker.php';
@@ -37,7 +37,7 @@ if ($lockHandle === false) {
 }
 
 // 多重実行防止は重要。cronが重なると同じ地震を同時に処理し、
-// 二重通知やフォームURLの二重消費につながるため、先行プロセスがあれば安全終了する。
+// 二重通知やフォームの重複生成につながるため、先行プロセスがあれば安全終了する。
 if (!flock($lockHandle, LOCK_EX | LOCK_NB)) {
     $logger->info('Another check process is already running.');
     fclose($lockHandle);
@@ -50,18 +50,13 @@ $lineWorksClient = null;
 
 try {
     // 実設定はGit管理外の config.php から読む。
-    // Config::load() が必須値・秘密鍵パス・テストモード条件をまとめて検証する。
+    // Config::load() が必須値・秘密鍵パスをまとめて検証する。
     $config = Config::load($rootDir . '/config.php');
 
     $stateStore = new StateStore($storageDir . '/state.json');
     $p2pQuakeClient = new P2PQuakeClient($config->p2pquakeApiUrl(), 10);
     $lineWorksClient = new LineWorksClient($config);
-    $formStockStore = new FormStockStore(
-        $config->formStockPath(),
-        $config->formImportCsvPath(),
-        $config->formImportProcessedDir(),
-        $config->formImportFailedDir()
-    );
+    $googleFormsClient = new GoogleFormsClient($config);
     // Store / Client をここで組み立て、EarthquakeChecker に実務フローを任せる。
     // P2PQuakeClient の limit は10固定。最新1件だけだと通知対象地震を見落とすため。
     $checker = new EarthquakeChecker(
@@ -69,8 +64,8 @@ try {
         $p2pQuakeClient,
         $lineWorksClient,
         $stateStore,
-        $formStockStore,
-        $logger
+        $logger,
+        $googleFormsClient
     );
 
     $checker->run();

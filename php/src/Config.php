@@ -13,16 +13,14 @@ final class Config
     private string $serviceAccount;
     private string $botId;
     private string $roomId;
-    private bool $formStockEnabled;
-    private string $formUrl;
+    private string $googleOauthClientId;
+    private string $googleOauthClientSecret;
+    private string $googleOauthRefreshToken;
+    private string $googleFormsTemplateId;
     private string $privateKeyPath;
-    private string $formStockPath;
-    private string $formImportCsvPath;
-    private string $formImportProcessedDir;
-    private string $formImportFailedDir;
-    private int $formLowStockThreshold;
-    private string $formLowStockRoomId;
     private int $unknownHypocenterHoldSeconds;
+    private int $quietHoursStart;
+    private int $quietHoursEnd;
 
     private function __construct(
         int $notifyScale,
@@ -33,16 +31,14 @@ final class Config
         string $serviceAccount,
         string $botId,
         string $roomId,
-        bool $formStockEnabled,
-        string $formUrl,
+        string $googleOauthClientId,
+        string $googleOauthClientSecret,
+        string $googleOauthRefreshToken,
+        string $googleFormsTemplateId,
         string $privateKeyPath,
-        string $formStockPath,
-        string $formImportCsvPath,
-        string $formImportProcessedDir,
-        string $formImportFailedDir,
-        int $formLowStockThreshold,
-        string $formLowStockRoomId,
-        int $unknownHypocenterHoldSeconds
+        int $unknownHypocenterHoldSeconds,
+        int $quietHoursStart,
+        int $quietHoursEnd
     ) {
         if (!in_array($notifyScale, [0, 10, 20, 30, 40, 45, 50, 55, 60, 70], true)) {
             throw new RuntimeException('Config value is not an allowed seismic intensity code: notify_scale');
@@ -50,8 +46,11 @@ final class Config
         if ($unknownHypocenterHoldSeconds <= 0) {
             throw new RuntimeException('Config value must be greater than 0: unknown_hypocenter_hold_seconds');
         }
-        if ($formStockEnabled && $formLowStockThreshold <= 0) {
-            throw new RuntimeException('Config value must be greater than 0: form_low_stock_threshold');
+        if ($quietHoursStart < 0 || $quietHoursStart > 23 || $quietHoursEnd < 0 || $quietHoursEnd > 23) {
+            throw new RuntimeException('Config value must be between 0 and 23: quiet_hours');
+        }
+        if ($quietHoursStart === $quietHoursEnd) {
+            throw new RuntimeException('Config quiet hours start and end must differ.');
         }
         if (!is_readable($privateKeyPath)) {
             throw new RuntimeException('Private key file is not readable.');
@@ -65,16 +64,14 @@ final class Config
         $this->serviceAccount = $serviceAccount;
         $this->botId = $botId;
         $this->roomId = $roomId;
-        $this->formStockEnabled = $formStockEnabled;
-        $this->formUrl = $formUrl;
+        $this->googleOauthClientId = $googleOauthClientId;
+        $this->googleOauthClientSecret = $googleOauthClientSecret;
+        $this->googleOauthRefreshToken = $googleOauthRefreshToken;
+        $this->googleFormsTemplateId = $googleFormsTemplateId;
         $this->privateKeyPath = $privateKeyPath;
-        $this->formStockPath = $formStockPath;
-        $this->formImportCsvPath = $formImportCsvPath;
-        $this->formImportProcessedDir = $formImportProcessedDir;
-        $this->formImportFailedDir = $formImportFailedDir;
-        $this->formLowStockThreshold = $formLowStockThreshold;
-        $this->formLowStockRoomId = $formLowStockRoomId;
         $this->unknownHypocenterHoldSeconds = $unknownHypocenterHoldSeconds;
+        $this->quietHoursStart = $quietHoursStart;
+        $this->quietHoursEnd = $quietHoursEnd;
     }
 
     public static function load(string $path): self
@@ -91,10 +88,8 @@ final class Config
         self::requireNumeric($values, 'notify_scale');
         self::requireIntegerIfPresent($values, 'notify_scale');
         self::requireIntegerIfPresent($values, 'unknown_hypocenter_hold_seconds');
-        self::requireBooleanIfPresent($values, 'form_stock_enabled');
-
-        $formStockEnabled = self::booleanValue($values, 'form_stock_enabled', true);
-
+        self::requireIntegerIfPresent($values, 'quiet_hours_start');
+        self::requireIntegerIfPresent($values, 'quiet_hours_end');
         foreach ([
             'client_id',
             'client_secret',
@@ -106,19 +101,8 @@ final class Config
             self::requireNonEmptyString($values, $key);
         }
 
-        if ($formStockEnabled) {
-            self::requireNumeric($values, 'form_low_stock_threshold');
-            foreach ([
-                'form_stock_path',
-                'form_import_csv_path',
-                'form_import_processed_dir',
-                'form_import_failed_dir',
-                'form_low_stock_room_id',
-            ] as $key) {
-                self::requireNonEmptyString($values, $key);
-            }
-        } else {
-            self::requireNonEmptyString($values, 'form_url');
+        foreach (['google_oauth_client_id', 'google_oauth_client_secret', 'google_oauth_refresh_token', 'google_forms_template_id'] as $key) {
+            self::requireNonEmptyString($values, $key);
         }
 
         return new self(
@@ -130,16 +114,14 @@ final class Config
             self::requiredStringValue($values, 'service_account'),
             self::requiredStringValue($values, 'bot_id'),
             self::requiredStringValue($values, 'room_id'),
-            $formStockEnabled,
-            $formStockEnabled ? '' : self::requiredStringValue($values, 'form_url'),
+            self::requiredStringValue($values, 'google_oauth_client_id'),
+            self::requiredStringValue($values, 'google_oauth_client_secret'),
+            self::requiredStringValue($values, 'google_oauth_refresh_token'),
+            self::requiredStringValue($values, 'google_forms_template_id'),
             self::requiredStringValue($values, 'private_key_path'),
-            self::stringValue($values, 'form_stock_path', dirname(__DIR__) . '/storage/forms.json'),
-            self::stringValue($values, 'form_import_csv_path', dirname(__DIR__) . '/forms/forms.csv'),
-            self::stringValue($values, 'form_import_processed_dir', dirname(__DIR__) . '/forms/processed'),
-            self::stringValue($values, 'form_import_failed_dir', dirname(__DIR__) . '/forms/failed'),
-            $formStockEnabled ? self::integerValue($values, 'form_low_stock_threshold', 10) : 10,
-            $formStockEnabled ? self::requiredStringValue($values, 'form_low_stock_room_id') : '',
-            self::integerValue($values, 'unknown_hypocenter_hold_seconds', 600)
+            self::integerValue($values, 'unknown_hypocenter_hold_seconds', 600),
+            self::integerValue($values, 'quiet_hours_start', 0),
+            self::integerValue($values, 'quiet_hours_end', 6)
         );
     }
 
@@ -185,57 +167,32 @@ final class Config
 
     public function maintenanceRoomId(): string
     {
-        return $this->formStockEnabled ? $this->formLowStockRoomId : $this->roomId;
+        return $this->roomId;
     }
 
-    public function formUrl(): string
-    {
-        return $this->formUrl;
-    }
-
-    public function formStockEnabled(): bool
-    {
-        return $this->formStockEnabled;
-    }
+    public function googleOauthClientId(): string { return $this->googleOauthClientId; }
+    public function googleOauthClientSecret(): string { return $this->googleOauthClientSecret; }
+    public function googleOauthRefreshToken(): string { return $this->googleOauthRefreshToken; }
+    public function googleFormsTemplateId(): string { return $this->googleFormsTemplateId; }
 
     public function privateKeyPath(): string
     {
         return $this->privateKeyPath;
     }
 
-    public function formStockPath(): string
-    {
-        return $this->formStockPath;
-    }
-
-    public function formImportCsvPath(): string
-    {
-        return $this->formImportCsvPath;
-    }
-
-    public function formImportProcessedDir(): string
-    {
-        return $this->formImportProcessedDir;
-    }
-
-    public function formImportFailedDir(): string
-    {
-        return $this->formImportFailedDir;
-    }
-
-    public function formLowStockThreshold(): int
-    {
-        return $this->formLowStockThreshold;
-    }
-
-    public function formLowStockRoomId(): string
-    {
-        return $this->formLowStockRoomId;
-    }
-
     public function unknownHypocenterHoldSeconds(): int
     {
         return $this->unknownHypocenterHoldSeconds;
+    }
+
+    public function quietHoursStart(): int
+    {
+        return $this->quietHoursStart;
+    }
+
+    public function quietHoursEnd(): int
+    {
+        return $this->quietHoursEnd;
     }
 
     /** @param array<string, mixed> $values */
@@ -264,16 +221,6 @@ final class Config
         }
 
         return (int) $values[$key];
-    }
-
-    /** @param array<string, mixed> $values */
-    private static function booleanValue(array $values, string $key, bool $default): bool
-    {
-        if (!array_key_exists($key, $values)) {
-            return $default;
-        }
-
-        return (bool) filter_var($values[$key], FILTER_VALIDATE_BOOLEAN);
     }
 
     /** @param array<string, mixed> $values */
@@ -313,14 +260,4 @@ final class Config
         throw new RuntimeException('Config value must be integer: ' . $key);
     }
 
-    /** @param array<string, mixed> $values */
-    private static function requireBooleanIfPresent(array $values, string $key): void
-    {
-        if (!array_key_exists($key, $values)) {
-            return;
-        }
-        if (filter_var($values[$key], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) === null) {
-            throw new RuntimeException('Config value must be boolean: ' . $key);
-        }
-    }
 }

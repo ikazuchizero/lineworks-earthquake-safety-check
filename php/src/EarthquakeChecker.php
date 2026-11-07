@@ -6,24 +6,20 @@ final class EarthquakeChecker
     // PHP版BOTの本体フローをまとめるクラス。
     //
     // メソッド内で Config の各値を毎回判定せず、実行に必要な値は constructor で確定してから使う。
-    // これにより fixed URL モードかフォーム在庫モードか、通知閾値はいくつか、といった前提を
+    // これにより通知閾値や静穏時間などの前提を
     // run() 以降で再解釈しない。
-    private const STOCK_OUT_REMINDER_INTERVAL_SECONDS = 21600;
-
     private P2PQuakeClient $p2pQuakeClient;
     private LineWorksClient $lineWorksClient;
     private StateStore $stateStore;
-    private FormStockStore $formStockStore;
+    private GoogleFormsClient $googleFormsClient;
     private Logger $logger;
     private int $notifyScale;
     private int $unknownHypocenterHoldSeconds;
-    private bool $formStockEnabled;
-    private string $formUrl;
-    private int $formLowStockThreshold;
-    private string $maintenanceRoomId;
-    private bool $lowStockNotifiedThisRun = false;
-    private bool $stockOutNotifiedThisRun = false;
-    private bool $skippedStockOutTargetThisRun = false;
+    private int $quietHoursStart;
+    private int $quietHoursEnd;
+    private DateTimeImmutable $now;
+    /** @var array<string, mixed>|null */
+    private ?array $quietTargetThisRun = null;
 
     /** @var array<int, string> */
     private array $scaleNames = [
@@ -43,34 +39,29 @@ final class EarthquakeChecker
         P2PQuakeClient $p2pQuakeClient,
         LineWorksClient $lineWorksClient,
         StateStore $stateStore,
-        FormStockStore $formStockStore,
-        Logger $logger
+        Logger $logger,
+        GoogleFormsClient $googleFormsClient,
+        ?DateTimeImmutable $now = null
     ) {
         $this->p2pQuakeClient = $p2pQuakeClient;
         $this->lineWorksClient = $lineWorksClient;
         $this->stateStore = $stateStore;
-        $this->formStockStore = $formStockStore;
         $this->logger = $logger;
+        $this->googleFormsClient = $googleFormsClient;
         $this->notifyScale = $config->notifyScale();
         $this->unknownHypocenterHoldSeconds = $config->unknownHypocenterHoldSeconds();
-        $this->formStockEnabled = $config->formStockEnabled();
-        $this->formUrl = $config->formUrl();
-        $this->formLowStockThreshold = $config->formLowStockThreshold();
-        $this->maintenanceRoomId = $config->maintenanceRoomId();
+        $this->quietHoursStart = $config->quietHoursStart();
+        $this->quietHoursEnd = $config->quietHoursEnd();
+        $this->now = $now ?? new DateTimeImmutable('now', new DateTimeZone('UTC'));
     }
 
     public function run(): void
     {
-        if ($this->formStockEnabled) {
-            $this->importForms();
-        }
-
         $events = $this->p2pQuakeClient->fetchEarthquakes();
         $targets = $this->selectNotificationTargets($events);
-        $this->retryUndeliveredStockOutNotices();
 
-        if ($targets === []) {
-            $this->notifyStockOutReminderIfNeeded();
+        if ($this->quietTargetThisRun !== null) {
+            array_unshift($targets, $this->quietTargetThisRun);
         }
 
         usort($targets, static function (array $a, array $b): int {
@@ -84,16 +75,11 @@ final class EarthquakeChecker
             return $timeA <=> $timeB;
         });
 
-        $usedFormCount = 0;
-
         foreach ($targets as $target) {
-            $form = $this->resolveFormForNotification($target);
-            if ($form === null) {
-                continue;
-            }
+            $formUrl = $this->resolveFormForNotification($target);
 
             try {
-                $this->lineWorksClient->sendMessage($this->createMessage($target, $form['url']));
+                $this->lineWorksClient->sendMessage($this->createMessage($target, $formUrl));
             } catch (Throwable $e) {
                 $this->logger->error('LINE WORKS send failed.', $this->logContext($target, [
                     'error' => $e->getMessage(),
@@ -102,12 +88,6 @@ final class EarthquakeChecker
             }
 
             try {
-                if ($form['index'] !== null) {
-                    $this->formStockStore->markUsed($form['index'], $target['dedupe_key']);
-                    $this->formStockStore->save();
-                    $usedFormCount++;
-                }
-
                 $notifiedAt = gmdate('c');
                 $record = [
                     'dedupe_key' => $target['dedupe_key'],
@@ -117,9 +97,6 @@ final class EarthquakeChecker
                     'max_scale' => $target['max_scale'],
                     'notified_at' => $notifiedAt,
                 ];
-                if ($form['index'] !== null) {
-                    $record['form_index'] = $form['index'];
-                }
 
                 $this->stateStore->markNotified($target['dedupe_key'], $record);
                 $this->stateStore->markNotifiedByEarthquakeTime((string) $target['earthquake_time'], [
@@ -127,276 +104,47 @@ final class EarthquakeChecker
                     'notified_at' => $notifiedAt,
                 ]);
                 $this->stateStore->removePendingUnknown((string) $target['earthquake_time']);
+                $quietWindowEnd = (string) ($target['quiet_window_end'] ?? $this->quietWindowEndForKnownContinuation($target));
+                if ($quietWindowEnd !== '') {
+                    $this->stateStore->markQuietCompletedThrough($quietWindowEnd);
+                    $this->stateStore->clearQuietBatch();
+                }
                 $this->stateStore->save();
 
                 $completionContext = $this->logContext($target);
-                if ($form['index'] !== null) {
-                    $completionContext['remaining_forms'] = $this->formStockStore->availableCount();
-                }
                 $this->logger->info('notification_completed', $completionContext);
             } catch (Throwable $e) {
                 $failureContext = [
                     'error' => $this->safeErrorSummary($e),
                 ];
-                if ($form['index'] !== null) {
-                    $failureContext['form_index'] = $form['index'];
-                }
 
-                $this->logger->error('State or form save failed after LINE WORKS send succeeded.', $this->logContext($target, $failureContext));
+                $this->logger->error('State save failed after LINE WORKS send succeeded.', $this->logContext($target, $failureContext));
                 throw $e;
             }
         }
 
-        if ($usedFormCount > 0) {
-            $this->notifyLowStockAfterConsumption();
-        }
     }
 
     /** @param array<string, mixed> $target */
-    private function resolveFormForNotification(array $target): ?array
+    private function resolveFormForNotification(array $target): string
     {
-        if (!$this->formStockEnabled) {
-            return [
-                'index' => null,
-                'url' => $this->formUrl,
-            ];
+        $earthquakeTime = (string) $target['earthquake_time'];
+        $record = $this->stateStore->googleFormForEarthquakeTime($earthquakeTime);
+        if (is_array($record) && is_string($record['responder_url'] ?? null) && $record['responder_url'] !== '') {
+            return $record['responder_url'];
         }
-
-        $form = $this->formStockStore->takeAvailable();
-        if ($form !== null) {
-            return $form;
+        if (!is_array($record) || !is_string($record['form_id'] ?? null) || $record['form_id'] === '') {
+            $this->googleFormsClient->assertTemplateCanPublish();
+            $record = ['form_id' => $this->googleFormsClient->copyTemplate($earthquakeTime)];
+            // Persist the authoritative copied ID before publishing or LINE WORKS.
+            $this->stateStore->saveGoogleFormForEarthquakeTime($earthquakeTime, $record);
+            $this->stateStore->save();
         }
-
-        $this->logger->error('Skipped earthquake notification because no form URL is available.', $this->logContext($target));
-        $this->markSkippedDueToFormStockOut($target);
-        $this->notifyStockOutForTarget($target);
-
-        return null;
-    }
-
-    private function importForms(): void
-    {
-        try {
-            $result = $this->formStockStore->importCsvIfExists();
-        } catch (FormImportException $e) {
-            $this->logger->error('Form CSV import failed.', [
-                'error' => $e->getMessage(),
-            ]);
-
-            try {
-                $this->notifyMaintenance('フォームURL CSVの取り込みに失敗しました。CSVのヘッダーと内容を確認してください。');
-            } catch (Throwable $notifyError) {
-                $this->logger->error('Form CSV failure notification failed.', [
-                    'error' => $notifyError->getMessage(),
-                ]);
-            }
-            return;
-        } catch (Throwable $e) {
-            $this->logger->error('Form CSV import failed unexpectedly.', [
-                'error' => $this->safeErrorSummary($e),
-            ]);
-
-            try {
-                $this->notifyMaintenance('フォームURL CSVの取り込み処理で予期しないエラーが発生しました。forms.json、processed/failed ディレクトリの配置・権限を確認してください。地震チェック本体は既存のフォーム在庫で継続します。');
-            } catch (Throwable $notifyError) {
-                $this->logger->error('Unexpected form CSV failure notification failed.', [
-                    'error' => $this->safeErrorSummary($notifyError),
-                ]);
-            }
-            return;
-        }
-
-        if ($result['processed']) {
-            $this->logger->info('Form CSV import succeeded.', [
-                'imported' => $result['imported'],
-                'duplicate_skipped' => $result['duplicate_skipped'],
-                'invalid_rows' => $result['invalid_rows'],
-            ]);
-        }
-    }
-
-    private function notifyLowStockAfterConsumption(): void
-    {
-        $availableCount = $this->formStockStore->availableCount();
-        if ($availableCount > $this->formLowStockThreshold || $this->lowStockNotifiedThisRun || $this->stockOutNotifiedThisRun) {
-            return;
-        }
-
-        try {
-            $this->notifyMaintenance(
-                '安否確認フォームURLの残数が少なくなっています。残り未使用フォームURL数: ' . $availableCount . '件。フォームURLを補充してください。'
-            );
-            $this->lowStockNotifiedThisRun = true;
-            $this->logger->info('form_low_stock_notice_sent', [
-                'available_count' => $availableCount,
-                'threshold' => $this->formLowStockThreshold,
-            ]);
-        } catch (Throwable $e) {
-            $this->logger->error('Form low stock notification failed.', [
-                'available_count' => $availableCount,
-                'threshold' => $this->formLowStockThreshold,
-                'error' => $e->getMessage(),
-            ]);
-        }
-    }
-
-    /** @param array<string, mixed> $target */
-    private function markSkippedDueToFormStockOut(array $target): void
-    {
-        $skippedAt = gmdate('c');
-        $record = [
-            'dedupe_key' => $target['dedupe_key'],
-            'event_id' => $target['event_id'],
-            'earthquake_time' => $target['earthquake_time'],
-            'hypocenter_name' => $target['hypocenter_name'],
-            'max_scale' => $target['max_scale'],
-            'skipped_at' => $skippedAt,
-            'reason' => 'form_stock_out',
-            'notice_status' => 'pending',
-            'notice_last_attempted_at' => null,
-            'notice_sent_at' => null,
-            'notice_error' => null,
-        ];
-
-        $this->stateStore->markSkippedDueToFormStockOut($target['dedupe_key'], $record);
-        $this->stateStore->removePendingUnknown((string) $target['earthquake_time']);
+        $record['responder_url'] = $this->googleFormsClient->prepareResponderUrl($record['form_id']);
+        // Persist the ready responder URL before LINE WORKS so a retry never creates another form.
+        $this->stateStore->saveGoogleFormForEarthquakeTime($earthquakeTime, $record);
         $this->stateStore->save();
-        $this->logger->info('skipped_due_to_form_stock_out', $this->logContext($target, [
-            'available_count' => 0,
-        ]));
-    }
-
-    /** @param array<string, mixed> $target */
-    private function notifyStockOutForTarget(array $target, ?string $noticeDedupeKey = null): void
-    {
-        $this->stockOutNotifiedThisRun = true;
-        $noticeDedupeKey ??= (string) $target['dedupe_key'];
-
-        try {
-            $this->notifyMaintenance(
-                '安否確認フォームURLが枯渇しているため、対象地震の安否確認通知を自動送信できませんでした。今回対象となった地震についてはbotからの自動再送は行いません。必要に応じて手動で安否確認を送信し、フォームURLを補充してください。'
-            );
-            $this->stateStore->markStockOutNoticeResult($noticeDedupeKey, 'sent');
-            $this->stateStore->save();
-            $this->logger->info('form_stock_out_notice_sent', $this->logContext($target, [
-                'available_count' => 0,
-            ]));
-        } catch (Throwable $e) {
-            try {
-                $this->stateStore->markStockOutNoticeResult($noticeDedupeKey, 'failed', $this->safeErrorSummary($e));
-                $this->stateStore->save();
-            } catch (Throwable $stateError) {
-                $this->logger->error('form_stock_out_notice_status_save_failed', $this->logContext($target, [
-                    'error' => $this->safeErrorSummary($stateError),
-                ]));
-            }
-
-            $this->logger->error('form_stock_out_notice_failed', $this->logContext($target, [
-                'available_count' => 0,
-                'error' => $this->safeErrorSummary($e),
-            ]));
-        }
-    }
-
-    private function retryUndeliveredStockOutNotices(): void
-    {
-        if (!$this->formStockEnabled) {
-            return;
-        }
-
-        foreach ($this->stateStore->stockOutNoticeRetryRecords() as $dedupeKey => $record) {
-            $target = $this->targetFromStockOutRecord($dedupeKey, $record);
-            if ($target === null) {
-                $this->logger->error('Stock out skipped record is invalid.', [
-                    'dedupe_key' => $dedupeKey,
-                    'reason' => 'invalid_stock_out_skipped_record',
-                ]);
-                continue;
-            }
-
-            $this->skippedStockOutTargetThisRun = true;
-            $this->logger->info('form_stock_out_notice_retrying', $this->logContext($target, [
-                'notice_status' => (string) ($record['notice_status'] ?? 'pending'),
-            ]));
-            $this->notifyStockOutForTarget($target, $dedupeKey);
-        }
-    }
-
-    /**
-     * @param array<string, mixed> $record
-     * @return array<string, mixed>|null
-     */
-    private function targetFromStockOutRecord(string $dedupeKey, array $record): ?array
-    {
-        $earthquakeTime = trim((string) ($record['earthquake_time'] ?? ''));
-        if ($earthquakeTime === '') {
-            return null;
-        }
-
-        $hypocenterName = trim((string) ($record['hypocenter_name'] ?? ''));
-        if ($hypocenterName === '') {
-            $hypocenterName = 'UNKNOWN';
-        }
-
-        $recordDedupeKey = trim((string) ($record['dedupe_key'] ?? $dedupeKey));
-        if ($recordDedupeKey === '') {
-            $recordDedupeKey = $earthquakeTime . '|' . $hypocenterName;
-        }
-
-        return [
-            'event' => null,
-            'event_id' => $record['event_id'] ?? null,
-            'earthquake_time' => $earthquakeTime,
-            'hypocenter_name' => $hypocenterName,
-            'max_scale' => (int) ($record['max_scale'] ?? 0),
-            'dedupe_key' => $recordDedupeKey,
-        ];
-    }
-
-    private function notifyStockOutReminderIfNeeded(): void
-    {
-        if (!$this->formStockEnabled || $this->skippedStockOutTargetThisRun) {
-            return;
-        }
-
-        if ($this->formStockStore->availableCount() > 0) {
-            if ($this->stateStore->stockOutReminderLastAlertedAt() !== null) {
-                $this->stateStore->clearStockOutReminderAlerted();
-                $this->stateStore->save();
-            }
-            return;
-        }
-
-        $lastAlertedAt = $this->stateStore->stockOutReminderLastAlertedAt();
-        if ($lastAlertedAt !== null) {
-            $lastAlertedTimestamp = strtotime($lastAlertedAt);
-            if ($lastAlertedTimestamp !== false && (time() - $lastAlertedTimestamp) < self::STOCK_OUT_REMINDER_INTERVAL_SECONDS) {
-                return;
-            }
-        }
-
-        $remindedAt = gmdate('c');
-
-        try {
-            $this->notifyMaintenance('安否確認フォームURLの未使用在庫が0件です。対象地震発生時に自動送信できなくなるため、フォームURLを補充してください。');
-            $this->stateStore->markStockOutReminderAlerted($remindedAt);
-            $this->stateStore->save();
-            $this->logger->info('form_stock_empty_idle_reminder_sent', [
-                'available_count' => 0,
-                'reminded_at' => $remindedAt,
-            ]);
-        } catch (Throwable $e) {
-            $this->logger->error('form_stock_empty_idle_reminder_failed', [
-                'available_count' => 0,
-                'reminded_at' => $remindedAt,
-                'error' => $e->getMessage(),
-            ]);
-        }
-    }
-
-    private function notifyMaintenance(string $message): void
-    {
-        $this->lineWorksClient->sendMessage($message, $this->maintenanceRoomId);
+        return $record['responder_url'];
     }
 
     /**
@@ -406,8 +154,9 @@ final class EarthquakeChecker
     private function selectNotificationTargets(array $events): array
     {
         $candidatesByTime = [];
+        $quietCandidates = [];
         $stateChanged = false;
-        $this->skippedStockOutTargetThisRun = false;
+        $this->quietTargetThisRun = null;
 
         foreach ($events as $event) {
             if (!is_array($event)) {
@@ -427,15 +176,72 @@ final class EarthquakeChecker
             if ($this->stateStore->hasNotifiedEarthquakeTime((string) $candidate['earthquake_time'])) {
                 continue;
             }
-            if (
-                $this->stateStore->hasSkippedDueToFormStockOut($candidate['dedupe_key'])
-                || $this->stateStore->hasSkippedDueToFormStockOutEarthquakeTime((string) $candidate['earthquake_time'])
-            ) {
-                $this->skippedStockOutTargetThisRun = true;
+            $quietWindow = $this->quietWindowFor((string) $candidate['earthquake_time']);
+            if ($quietWindow !== null) {
+                if ($candidate['hypocenter_name'] === 'UNKNOWN') {
+                    $pending = $this->stateStore->getPendingUnknown((string) $candidate['earthquake_time']);
+                    if ($pending === null) {
+                        $this->stateStore->markPendingUnknown((string) $candidate['earthquake_time'], $this->pendingUnknownRecord($candidate));
+                        $stateChanged = true;
+                    } elseif ($this->isBetterQuietCandidate($candidate, $pending)) {
+                        $this->stateStore->markPendingUnknown((string) $candidate['earthquake_time'], array_merge($pending, $this->pendingUnknownRecord($candidate), [
+                            'first_seen_at' => $pending['first_seen_at'] ?? gmdate('c'),
+                        ]));
+                        $stateChanged = true;
+                    }
+                }
+                $quietCandidates[] = [
+                    'candidate' => $candidate,
+                    'window' => $quietWindow,
+                ];
                 continue;
             }
-
             $candidatesByTime[(string) $candidate['earthquake_time']][] = $candidate;
+        }
+
+        if ($quietCandidates !== []) {
+            usort($quietCandidates, function (array $left, array $right): int {
+                return $this->compareTimes(
+                    (string) $right['window']['window_start'],
+                    (string) $left['window']['window_start']
+                );
+            });
+            $latestWindow = $quietCandidates[0]['window'];
+            $quietCandidate = null;
+            foreach ($quietCandidates as $quietEntry) {
+                if ($quietEntry['window']['window_start'] !== $latestWindow['window_start']) {
+                    break;
+                }
+                if ($quietCandidate === null || $this->isBetterQuietCandidate($quietEntry['candidate'], $quietCandidate)) {
+                    $quietCandidate = $quietEntry['candidate'];
+                }
+            }
+            if ($quietCandidate !== null) {
+                $stateChanged = $this->captureQuietCandidate($quietCandidate, $latestWindow) || $stateChanged;
+            }
+        }
+
+        $quietBatch = $this->stateStore->quietBatch();
+        if ($quietBatch !== null && $this->quietBatchHasEnded($quietBatch)) {
+            $completedThrough = $this->stateStore->quietCompletedThrough();
+            if ($completedThrough === null || $this->compareTimes((string) $quietBatch['window_end'], $completedThrough) > 0) {
+                $quietTarget = $this->candidateFromQuietBatch($quietBatch);
+                if ($quietTarget !== null && $quietTarget['hypocenter_name'] === 'UNKNOWN') {
+                    $pending = $this->stateStore->getPendingUnknown((string) $quietTarget['earthquake_time']);
+                    if ($pending === null || !$this->isPendingUnknownExpired($pending)) {
+                        $quietTarget = null;
+                    }
+                }
+                if (
+                    $quietTarget !== null
+                    && !$this->stateStore->has($quietTarget['dedupe_key'])
+                    && !$this->stateStore->hasNotifiedEarthquakeTime((string) $quietTarget['earthquake_time'])
+                ) {
+                    $this->quietTargetThisRun = $quietTarget;
+                    $this->quietTargetThisRun['quiet_window_end'] = (string) $quietBatch['window_end'];
+                    $stateChanged = $this->removePendingUnknownsForQuietWindow((string) $quietBatch['window_start']) || $stateChanged;
+                }
+            }
         }
 
         $targets = [];
@@ -485,13 +291,11 @@ final class EarthquakeChecker
                 $stateChanged = true;
                 continue;
             }
-            if ($this->stateStore->hasSkippedDueToFormStockOutEarthquakeTime($earthquakeTime)) {
-                $this->skippedStockOutTargetThisRun = true;
-                $this->stateStore->removePendingUnknown($earthquakeTime);
-                $stateChanged = true;
+            if (isset($seenEarthquakeTimes[$earthquakeTime]) || !$this->isPendingUnknownExpired($pending)) {
                 continue;
             }
-            if (isset($seenEarthquakeTimes[$earthquakeTime]) || !$this->isPendingUnknownExpired($pending)) {
+
+            if ($this->pendingUnknownHasUnfinishedQuietBatch($earthquakeTime)) {
                 continue;
             }
 
@@ -501,12 +305,6 @@ final class EarthquakeChecker
                     'earthquake_time' => $earthquakeTime,
                     'reason' => 'invalid_pending_unknown_record',
                 ]);
-                $this->stateStore->removePendingUnknown($earthquakeTime);
-                $stateChanged = true;
-                continue;
-            }
-            if ($this->stateStore->hasSkippedDueToFormStockOut($candidate['dedupe_key'])) {
-                $this->skippedStockOutTargetThisRun = true;
                 $this->stateStore->removePendingUnknown($earthquakeTime);
                 $stateChanged = true;
                 continue;
@@ -531,6 +329,171 @@ final class EarthquakeChecker
         }
 
         return $targets;
+    }
+
+    /** @param array<string, mixed> $candidate @param array{window_start: string, window_end: string} $window */
+    private function captureQuietCandidate(array $candidate, array $window): bool
+    {
+        $completedThrough = $this->stateStore->quietCompletedThrough();
+        if ($completedThrough !== null && $this->compareTimes($window['window_end'], $completedThrough) <= 0) {
+            return false;
+        }
+
+        $batch = $this->stateStore->quietBatch();
+        if ($batch !== null && (string) ($batch['window_start'] ?? '') !== $window['window_start']) {
+            return false;
+        }
+        if ($batch !== null && !$this->isBetterQuietCandidate($candidate, $batch['candidate'] ?? null)) {
+            return false;
+        }
+
+        $this->stateStore->setQuietBatch([
+            'window_start' => $window['window_start'],
+            'window_end' => $window['window_end'],
+            'candidate' => $candidate,
+        ]);
+
+        return true;
+    }
+
+    /** @param array<string, mixed> $candidate @param mixed $existing */
+    private function isBetterQuietCandidate(array $candidate, mixed $existing): bool
+    {
+        if (!is_array($existing)) {
+            return true;
+        }
+        if ((string) $candidate['earthquake_time'] === (string) ($existing['earthquake_time'] ?? '')) {
+            return $candidate['hypocenter_name'] !== 'UNKNOWN' && ($existing['hypocenter_name'] ?? 'UNKNOWN') === 'UNKNOWN';
+        }
+
+        if ((int) $candidate['max_scale'] !== (int) ($existing['max_scale'] ?? 0)) {
+            return (int) $candidate['max_scale'] > (int) ($existing['max_scale'] ?? 0);
+        }
+
+        return $this->compareTimes((string) $candidate['earthquake_time'], (string) ($existing['earthquake_time'] ?? '')) > 0;
+    }
+
+    /** @param array<string, mixed> $target */
+    private function quietWindowEndForKnownContinuation(array $target): ?string
+    {
+        if (($target['hypocenter_name'] ?? 'UNKNOWN') === 'UNKNOWN') {
+            return null;
+        }
+
+        $batch = $this->stateStore->quietBatch();
+        $candidate = is_array($batch['candidate'] ?? null) ? $batch['candidate'] : null;
+        if ($batch === null || $candidate === null) {
+            return null;
+        }
+        if ((string) ($candidate['earthquake_time'] ?? '') !== (string) ($target['earthquake_time'] ?? '')) {
+            return null;
+        }
+        if (!$this->quietBatchHasEnded($batch)) {
+            return null;
+        }
+
+        return (string) ($batch['window_end'] ?? '');
+    }
+
+    private function pendingUnknownHasUnfinishedQuietBatch(string $earthquakeTime): bool
+    {
+        $batch = $this->stateStore->quietBatch();
+        if ($batch === null) {
+            return false;
+        }
+
+        $candidate = $batch['candidate'] ?? null;
+        if (!is_array($candidate) || (string) ($candidate['earthquake_time'] ?? '') !== $earthquakeTime) {
+            return false;
+        }
+
+        return !$this->quietBatchHasEnded($batch);
+    }
+
+    private function removePendingUnknownsForQuietWindow(string $windowStart): bool
+    {
+        $changed = false;
+        foreach ($this->stateStore->pendingUnknowns() as $earthquakeTime => $_pending) {
+            $window = $this->quietWindowFor($earthquakeTime);
+            if ($window !== null && $window['window_start'] === $windowStart) {
+                $this->stateStore->removePendingUnknown($earthquakeTime);
+                $changed = true;
+            }
+        }
+
+        return $changed;
+    }
+
+    /** @param array<string, mixed> $batch @return array<string, mixed>|null */
+    private function candidateFromQuietBatch(array $batch): ?array
+    {
+        $candidate = $batch['candidate'] ?? null;
+
+        return is_array($candidate) && trim((string) ($candidate['earthquake_time'] ?? '')) !== '' ? $candidate : null;
+    }
+
+    /** @param array<string, mixed> $batch */
+    private function quietBatchHasEnded(array $batch): bool
+    {
+        $end = $this->parseTokyoTime((string) ($batch['window_end'] ?? ''));
+
+        return $end !== null && $end->getTimestamp() <= $this->now->getTimestamp();
+    }
+
+    /** @return array{window_start: string, window_end: string}|null */
+    private function quietWindowFor(string $value): ?array
+    {
+        $time = $this->parseTokyoTime($value);
+        if ($time === null) {
+            return null;
+        }
+
+        $hour = (int) $time->format('G');
+        $start = $this->quietHoursStart;
+        $end = $this->quietHoursEnd;
+        $inQuiet = $start < $end ? ($hour >= $start && $hour < $end) : ($hour >= $start || $hour < $end);
+        if (!$inQuiet) {
+            return null;
+        }
+
+        $date = $time->setTime(0, 0);
+        if ($start > $end && $hour < $end) {
+            $date = $date->modify('-1 day');
+        }
+        $windowStart = $date->setTime($start, 0);
+        $windowEnd = $start < $end
+            ? $date->setTime($end, 0)
+            : $date->modify('+1 day')->setTime($end, 0);
+
+        return [
+            'window_start' => $windowStart->format(DateTimeInterface::ATOM),
+            'window_end' => $windowEnd->format(DateTimeInterface::ATOM),
+        ];
+    }
+
+    private function parseTokyoTime(string $value): ?DateTimeImmutable
+    {
+        try {
+            $zone = new DateTimeZone('Asia/Tokyo');
+            $hasTimeZone = preg_match('/(?:Z|[+-]\d{2}:?\d{2})$/', $value) === 1;
+
+            $time = $hasTimeZone ? new DateTimeImmutable($value) : new DateTimeImmutable($value, $zone);
+
+            return $time->setTimezone($zone);
+        } catch (Exception) {
+            return null;
+        }
+    }
+
+    private function compareTimes(string $left, string $right): int
+    {
+        $leftTime = $this->parseTokyoTime($left)?->getTimestamp();
+        $rightTime = $this->parseTokyoTime($right)?->getTimestamp();
+        if ($leftTime === null || $rightTime === null) {
+            return strcmp($left, $right);
+        }
+
+        return $leftTime <=> $rightTime;
     }
 
     /**
@@ -559,7 +522,7 @@ final class EarthquakeChecker
             'earthquake_time' => $candidate['earthquake_time'],
             'hypocenter_name' => $candidate['hypocenter_name'],
             'max_scale' => $candidate['max_scale'],
-            'first_seen_at' => gmdate('c'),
+            'first_seen_at' => $this->now->setTimezone(new DateTimeZone('UTC'))->format(DateTimeInterface::ATOM),
         ];
     }
 
@@ -610,7 +573,7 @@ final class EarthquakeChecker
             return true;
         }
 
-        return (time() - $firstSeenTimestamp) >= $this->unknownHypocenterHoldSeconds;
+        return ($this->now->getTimestamp() - $firstSeenTimestamp) >= $this->unknownHypocenterHoldSeconds;
     }
 
     /**

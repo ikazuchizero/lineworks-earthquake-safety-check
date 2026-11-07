@@ -29,7 +29,6 @@ register_test('setup checker missing directory', static function (): void {
     $dir = tempDir();
     createRequiredPhpFiles($dir);
     writeConfig($dir);
-    mkdir($dir . '/storage', 0775, true);
 
     $checker = new SetupChecker($dir);
     $results = $checker->run();
@@ -38,7 +37,7 @@ register_test('setup checker missing directory', static function (): void {
         $byName[$result['name']] = $result;
     }
 
-    assertTrue(($byName['forms_dir']['status'] ?? null) === 'NG', 'setup checker must fail when forms directory is missing.');
+    assertTrue(($byName['storage_dir']['status'] ?? null) === 'NG', 'setup checker must fail when storage directory is missing.');
 });
 
 register_test('setup checker missing PHP file', static function (): void {
@@ -76,19 +75,16 @@ register_test('setup checker empty PHP file', static function (): void {
     assertTrue(($byName['php_src_EarthquakeChecker']['reason'] ?? null) === 'empty', 'empty PHP file must be reported as empty.');
 });
 
-register_test('setup checker skips form directories when stock disabled', static function (): void {
+register_test('setup checker needs only storage and required PHP files', static function (): void {
     $dir = tempDir();
     createRequiredPhpFiles($dir);
     mkdir($dir . '/storage', 0775, true);
-    writeConfig($dir, [
-        'form_stock_enabled' => false,
-        'form_url' => 'https://example.invalid/fixed-form',
-    ]);
+    writeConfig($dir);
 
     $checker = new SetupChecker($dir);
     $results = $checker->run();
 
-    assertTrue($checker->isOk($results), 'setup checker must pass without form stock directories when form stock is disabled.');
+    assertTrue($checker->isOk($results), 'setup checker must pass with storage and required PHP files.');
 });
 
 register_test('setup checker not writable directory', static function (): void {
