@@ -40,7 +40,7 @@ GAS の `setPublished(true)` で回答者 URL を公開します。組織のポ�
 
 ### 0. コードを Apps Script プロジェクトへ反映（初回のみ）
 
-新規に GAS プロジェクトを作る場合は [docs/DEPLOY_OPERATOR.md](docs/DEPLOY_OPERATOR.md) の手順で 28 ファイルを一括反映できます（ブラウザのみで完結。PC へのインストール・ファイルのアップロードは不要）。既にエディタにコードがある場合は不要です。
+新規に GAS プロジェクトを作る場合は [docs/DEPLOY_OPERATOR.md](docs/DEPLOY_OPERATOR.md) の手順で 29 ファイルを一括反映できます（ブラウザのみで完結。PC へのインストール・ファイルのアップロードは不要）。既にエディタにコードがある場合は不要です。
 
 ### 1. スクリプトプロパティを設定
 
@@ -304,6 +304,7 @@ PHP 版 `codex/setup-check` のテストは 39 件（`ConfigTest` 4、`Connectiv
 | `initializeNotificationBaseline.gs` | 初回導入時の通知済みベースライン作成 |
 | `setupCheck.gs` | 初期設定確認 |
 | `setupTriggers.gs` | トリガー登録 |
+| `setProperties.gs` | スクリプトプロパティの一括登録（初回セットアップ用） |
 | `connectivityCheck.gs` | LINE WORKS 疎通確認 |
 | `resetState.gs` | 状態リセット |
 | `selfTest.gs` | 外部通信なしのロジックテスト |

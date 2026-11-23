@@ -55,7 +55,7 @@
 cd ~/gas-repo
 git pull --ff-only
 git log -1 --oneline       # 反映するコミットを控える
-ls src | wc -l             # 28
+ls src | wc -l             # 29
 ```
 
 ---
@@ -96,7 +96,7 @@ ls src | wc -l             # 28
 | 18:40 | 管理者 | ② グループトーク作成 + Bot 招待 | トークに Bot が表示される |
 | 18:45 | 自分 | GAS プロジェクト作成 or 既存を流用、`appsscript.json` 確認 | `oauthScopes` 5つ |
 | 18:50 | 自分 | スプレッドシート作成 → `SPREADSHEET_ID` 控え | URL の `/d/<id>/edit` |
-| 18:55 | 自分 | スクリプトプロパティ登録（`setAllProperties`） | 実行ログにキー一覧 |
+| 18:55 | 自分 | `setProperties.gs` に値を入れて `setAllProperties` 実行 | 実行ログにキー一覧 |
 | 19:00 | 自分 | `setupCheck` | `triggers` 以外 OK |
 | 19:05 | 自分 | `connectivityCheck` | `HTTP=201` とトーク着信 |
 | 19:10 | 自分 | `runSelfTests` | すべて成功 |
@@ -105,7 +105,7 @@ ls src | wc -l             # 28
 | 19:22 | 自分 | `initializeNotificationBaseline`（旧系停止直後） | `初回ベースライン登録: N件` |
 | 19:25 | 自分 | `setupTriggers`（ベースライン直後） | `…（10分ごと）` |
 | 19:30 | 自分 | `setupCheck` | `すべてOK` |
-| 19:35 | 自分 | 一時ファイル（`setProps` 等）削除 | 秘密鍵がソースに残っていない |
+| 19:35 | 自分 | 一時ファイル（`setProperties.gs`）削除 | 秘密鍵がソースに残っていない |
 | 19:40 | 自分 | 関係者へ完了連絡 | URL・コミット・担当者を共有 |
 
 > **順番の要点**
@@ -167,7 +167,7 @@ ls src | wc -l             # 28
 | `User has not enabled the Apps Script API` | 本番アカウントで <https://script.google.com/home/usersettings> を ON、数分待つ |
 | `403`（送信） | Bot の管理画面追加 → ルーム招待 → `SERVICE_ACCT` が同アカウントか → `ROOM_ID` が channelId か |
 | Bot が招待一覧に出ない | 管理画面「サービス」→「Bot」→「Bot追加」。1対1ではなくグループトーク |
-| `Pushed 0 files` | `--rootDir src` を付けているか、`ls src` が28か |
+| `Pushed 0 files` | `--rootDir src` を付けているか、`ls src` が29か |
 | `NG triggers` | `setupTriggers` 未実行、または間隔の保存値が古い |
 | ベースラインが拒否される | 既にトリガーが動いている。トリガー削除 → 実行 → 再登録 |
 | `429 error 1015` | P2PQuake のレート制限。10分間隔で運用し、頻発なら15/30分へ |

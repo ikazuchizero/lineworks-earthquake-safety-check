@@ -122,7 +122,7 @@ cd ~/gas-repo
 git log -1 --oneline
 ```
 
-✅ **確認**: `git log` の行が表示され、`ls src | wc -l` を実行すると `28` になる
+✅ **確認**: `git log` の行が表示され、`ls src | wc -l` を実行すると `29` になる
 
 ```bash
 ls src | wc -l
@@ -136,7 +136,7 @@ cp -r src/. /tmp/gas_backup/
 ls /tmp/gas_backup | wc -l
 ```
 
-✅ **確認**: `28`
+✅ **確認**: `29`
 
 ## 3-4. ログイン
 
@@ -171,7 +171,7 @@ npx --yes @google/clasp status
 npx --yes @google/clasp push -f
 ```
 
-✅ **確認**: 最後に **`Pushed 28 files.`** と出る
+✅ **確認**: 最後に **`Pushed 29 files.`** と出る
 
 ---
 
@@ -181,34 +181,30 @@ npx --yes @google/clasp push -f
 
 記録シートの GAS プロジェクト URL を開きます。
 
-## 4-2. 設定用ファイルを作る
+## 4-2. 値を書き換える
 
-1. 左のファイル一覧の「＋」→「**スクリプト**」
-2. ファイル名を `setProps` にする
-3. 元の内容を全部消して、以下を貼る（`'...'` の中を自分の値に置き換える）
-4. **Ctrl+S で保存**
+設定用の機能は**プログラムに最初から入っています**。新しく作る必要はありません。
+
+1. 左のファイル一覧から **`setProperties.gs`** を開く
+2. `SETUP_VALUES` の `""` の中を自分の値に書き換える
+3. **Ctrl+S で保存**
 
 ```js
-function setAllProperties() {
-  const values = {
-    SPREADSHEET_ID: 'ここにスプレッドシートID',
-    CLIENT_ID: 'ここにClient ID',
-    CLIENT_SECRET: 'ここにClient Secret',
-    SERVICE_ACCT: 'ここにサービスアカウント',
-    BOT_ID: 'ここにBot ID',
-    PRIVATE_KEY: 'ここに秘密鍵（改行を消して1行）',
-    NOTIFY_SCALE: '40',
-    FORM_TEMPLATE_ID: 'ここにフォームID'
-  };
-
-  const props = PropertiesService.getScriptProperties();
-  props.setProperties(values, false);
-  console.log('設定したキー: ' + Object.keys(values).join(', '));
-}
+const SETUP_VALUES = {
+    SPREADSHEET_ID: "ここにスプレッドシートID",
+    CLIENT_ID: "ここにClient ID",
+    CLIENT_SECRET: "ここにClient Secret",
+    SERVICE_ACCT: "ここにサービスアカウント",
+    BOT_ID: "ここにBot ID",
+    PRIVATE_KEY: "ここに秘密鍵（改行を消して1行）",
+    NOTIFY_SCALE: "40",
+    FORM_TEMPLATE_ID: "ここにフォームID",
+};
 ```
 
-> 固定URL方式の場合: `FORM_TEMPLATE_ID` の行を消して
-> `FIXED_FORM_URL: 'https://docs.google.com/forms/d/e/.../viewform',` に置き換える
+- 空欄のままにしたキーは**自動でスキップ**されます（`ROOM_ID` は 4-4 の後で入れます）
+- 固定URL方式の場合: `FORM_TEMPLATE_ID` を消して
+  `FIXED_FORM_URL: "https://docs.google.com/forms/d/e/.../viewform",` に置き換える
 
 ## 4-3. 実行
 
@@ -219,9 +215,9 @@ function setAllProperties() {
 
 ✅ **確認**: `設定したキー: SPREADSHEET_ID, CLIENT_ID, ...` が表示される
 
-## 4-4. ROOM_ID を取得（設定用ファイルに追記）
+## 4-4. ROOM_ID を取得（`setProperties.gs` の末尾に追記）
 
-1. 同じ `setProps` ファイルの末尾に、以下を**そのまま**貼る
+1. `setProperties.gs` の末尾に、以下を**そのまま**貼る
 2. **Ctrl+S** → 関数選択で **`diagnoseBot`** →「実行」
 
 ```js
@@ -280,10 +276,10 @@ function diagnoseBot() {
 
 ## 4-5. ROOM_ID を登録
 
-1. `setAllProperties` の `values` に1行追加
+1. `setProperties.gs` の `SETUP_VALUES` に1行追加
 
 ```js
-    ROOM_ID: 'さっきのchannelId',
+    ROOM_ID: "さっきのchannelId",
 ```
 
 2. **Ctrl+S** → `setAllProperties` を実行
@@ -361,7 +357,7 @@ OK triggers
 
 # Part 7. 後片付け（3分）
 
-1. `setProps` ファイルを削除（右クリック → 削除）
+1. `setProperties.gs` を削除（右クリック → 削除）
    - 秘密鍵がソースに残るため必ず削除
 2. 記録シートを担当者に送る
 3. グループトークに「テスト完了」と投稿して、届くことを確認

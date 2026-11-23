@@ -29,7 +29,7 @@ Node.js (LTS)・npm・git が最初から入っているため、PC 側の環境
 |---|---|
 | リポジトリ | `https://github.com/ikazuchizero/lineworks-earthquake-safety-check.git`（public） |
 | ブランチ | `codex/deploy-operator-guide`（本番用） |
-| 反映ファイル数 | **28**（`appsscript.json` + `.gs` 27） |
+| 反映ファイル数 | **29**（`appsscript.json` + `.gs` 28） |
 | 地震チェック間隔 | 10分（`src/config.gs` の `CHECK_INTERVAL_MINUTES`） |
 
 > ⚠️ `main` は 2026-06-09 時点の旧版です。**`main` を clone しないでください。**
@@ -86,7 +86,7 @@ cd ~
 git clone -b codex/deploy-operator-guide https://github.com/ikazuchizero/lineworks-earthquake-safety-check.git gas-repo
 cd ~/gas-repo
 git branch --show-current    # codex/deploy-operator-guide
-ls src | wc -l               # 28
+ls src | wc -l               # 29
 ```
 
 - `gas-repo` は `git clone` が自動で作るので `mkdir` は不要
@@ -99,7 +99,7 @@ ls src | wc -l               # 28
 ```bash
 mkdir -p /tmp/gas_backup
 cp -r src/. /tmp/gas_backup/
-ls /tmp/gas_backup | wc -l   # 28
+ls /tmp/gas_backup | wc -l   # 29
 ```
 
 **なぜ必要か**: 次の `clasp create` は内部でリモートの初期ファイルを pull するため、
@@ -142,8 +142,8 @@ cp /tmp/gas_backup/appsscript.json src/appsscript.json
 # create が生成した既定の Code.gs だけ削除（自作コードは消さない）
 if [ -f src/Code.gs ] && grep -q "function myFunction" src/Code.gs; then rm src/Code.gs; fi
 
-npx --yes @google/clasp status     # 28ファイルが並ぶ
-npx --yes @google/clasp push -f    # Pushed 28 files.
+npx --yes @google/clasp status     # 29ファイルが並ぶ
+npx --yes @google/clasp push -f    # Pushed 29 files.
 ```
 
 ### 2-7. マニフェストの確認
@@ -206,41 +206,41 @@ Developer Console に Bot を作っただけでは Talk の招待一覧に出ま
 
 ### 5-1. 一括登録（推奨）
 
-エディタで「＋」→「スクリプト」で `setProps` を作成し、以下を貼って**保存 → 実行**します。
-終わったら**このファイルは削除**してください（秘密鍵がソースに残るため）。
+プロパティ登録用の `setProperties.gs` は**プログラムに含まれています**（手動で作る必要はありません）。
+
+1. エディタ左の一覧から **`setProperties.gs`** を開く
+2. `SETUP_VALUES` の各項目を自分の値に書き換える（空欄のキーはスキップされます）
+3. **Ctrl+S** → 関数選択で **`setAllProperties`** →「実行」
+4. 実行ログの「設定したキー: …」を確認
+5. 必要なら **`showPropertyStatus`** を実行して必須キーの過不足を確認（値は表示されません）
+6. 終わったら **`setProperties.gs` を削除**（秘密鍵がソースに残るため。プロパティはサーバー側に残ります）
 
 ```js
-function setAllProperties() {
-  const values = {
-    SPREADSHEET_ID: 'ここにスプレッドシートID',
+const SETUP_VALUES = {
+    SPREADSHEET_ID: "ここにスプレッドシートID",
+    CLIENT_ID: "ここにClient ID",
+    CLIENT_SECRET: "ここにClient Secret",
+    SERVICE_ACCT: "ここにサービスアカウント",
+    BOT_ID: "ここにBot ID",
+    ROOM_ID: "ここに通知先のchannelId",
+    MAINTENANCE_ROOM_ID: "ここに障害通知用channelId（任意）",
 
-    CLIENT_ID: 'ここにClient ID',
-    CLIENT_SECRET: 'ここにClient Secret',
-    SERVICE_ACCT: 'ここにサービスアカウント',
-    BOT_ID: 'ここにBot ID',
-    ROOM_ID: 'ここに通知先のchannelId',
-    MAINTENANCE_ROOM_ID: 'ここに障害通知用channelId（任意）',
-
-    // 秘密鍵は「改行を消して1行」にすると安全（コード側で64文字に組み直します）
-    PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----MIIE...-----END PRIVATE KEY-----',
+    // 改行を消して1行で貼る（コード側で64文字に組み直します）
+    PRIVATE_KEY: "-----BEGIN PRIVATE KEY-----MIIE...-----END PRIVATE KEY-----",
 
     // テスト用は 0。本番は 40（震度4以上）など
-    NOTIFY_SCALE: '40',
+    NOTIFY_SCALE: "40",
 
     // テンプレート複製方式ならこれ。固定URL方式なら FIXED_FORM_URL に置き換え
-    FORM_TEMPLATE_ID: 'ここにフォームID',
-  };
-
-  const props = PropertiesService.getScriptProperties();
-  props.setProperties(values, false);   // false = 既存の他のキーは消さない
-
-  console.log('設定したキー: ' + Object.keys(values).join(', '));
-  console.log('現在のキー: ' + Object.keys(props.getProperties()).sort().join(', '));
-}
+    FORM_TEMPLATE_ID: "ここにフォームID",
+    // FIXED_FORM_URL: "https://docs.google.com/forms/d/e/.../viewform",
+};
 ```
 
-- 値は**すべて文字列**で書く（`'0'`、`'40'`）
+- 値は**すべて文字列**で書く（`"0"`、`"40"`）
 - 実行ログに「設定したキー: …」が出れば登録成功。**保存しただけでは反映されません**
+- `ROOM_ID` は 8-2 の `diagnoseBot` で確認した channelId を入れる
+- 後から `clasp push` すると、削除した `setProperties.gs` が**空の状態で復活**します。使うときだけ値を入れてください
 
 ### 5-2. 主要プロパティ
 
@@ -455,7 +455,7 @@ push → `setupTriggers` → `setupCheck` の順で反映。
 | `NG triggers` | トリガー未登録／保存値と設定の不一致 | `setupTriggers` を実行 |
 | `ベースライン…稼働中トリガーのため実行できません` | トリガー登録後に実行した | トリガーを削除 → 実行 → 再登録。または `ALLOW_BASELINE_WITH_TRIGGERS=true`（非推奨） |
 | `runSelfTests` が一覧に無い | 別ファイルを開いている | `selfTest.gs` を開いてから選ぶ |
-| ファイル数が28でない | 古いブランチ／clone | `git branch --show-current` が `codex/deploy-operator-guide` か確認 |
+| ファイル数が29でない | 古いブランチ／clone | `git branch --show-current` が `codex/deploy-operator-guide` か確認 |
 | 認証で `Access blocked` | 組織の制限 | 管理者に Apps Script API の許可を確認 |
 | `Service using too much computer time for one day` | トリガー実行時間の上限 | 間隔を 10/15/30 分に延ばす |
 
