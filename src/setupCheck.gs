@@ -118,7 +118,7 @@ function setupCheck() {
                 PROPERTY_KEYS.healthIntervalHours
             );
 
-            if (checkMinutes === "1" && healthHours === "1") {
+            if (checkMinutes === String(CHECK_INTERVAL_MINUTES) && healthHours === "1") {
                 results.push(okResult("triggers"));
             } else {
                 results.push(

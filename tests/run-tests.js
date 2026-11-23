@@ -394,6 +394,7 @@ const gas = new Function(
             "isStaleEarthquakeTime",
             "recordExecutionFailure",
             "recordExecutionSkipped",
+            "CHECK_INTERVAL_MINUTES",
         ].join(", ") +
         "};"
 )(
@@ -735,7 +736,7 @@ test("ヘルスチェック: 正常動作率は100%を超えず、実行成功�
 
     assert.equal(rows.length, 2);
     assert.equal(last.length, 13);
-    assert.equal(last[3], 60);
+    assert.equal(last[3], Math.round(60 / gas.CHECK_INTERVAL_MINUTES));
     assert.equal(last[5], 120);
     assert.equal(last[7], 1);
     assert.equal(last[11], 3);
@@ -849,7 +850,7 @@ test("セットアップ確認: トリガー間隔の記録がないとNG", () =
 
     assert.equal(gas.setupCheck(), false);
 
-    world.properties.TRIGGER_CHECK_INTERVAL_MINUTES = "1";
+    world.properties.TRIGGER_CHECK_INTERVAL_MINUTES = String(gas.CHECK_INTERVAL_MINUTES);
     world.properties.TRIGGER_HEALTH_INTERVAL_HOURS = "1";
 
     assert.equal(gas.setupCheck(), true);
@@ -1024,7 +1025,7 @@ test("セットアップ確認: 固定URLのGoogleフォームは回答受付を
         { getHandlerFunction: () => "checkAndNotifyEarthquake" },
         { getHandlerFunction: () => "writeHourlyHealthCheck" },
     ];
-    world.properties.TRIGGER_CHECK_INTERVAL_MINUTES = "1";
+    world.properties.TRIGGER_CHECK_INTERVAL_MINUTES = String(gas.CHECK_INTERVAL_MINUTES);
     world.properties.TRIGGER_HEALTH_INTERVAL_HOURS = "1";
     world.forms["url:" + url] = { accepting: true, published: true };
 

@@ -27,7 +27,7 @@ function selfTestConfig(overrides) {
         logRetentionDays: 90,
         failureNotifySuppressSeconds: 3600,
         formTitlePrefix: "安否確認",
-        expectedRunsPerHour: 60,
+        expectedRunsPerHour: Math.round(60 / CHECK_INTERVAL_MINUTES),
     };
 
     if (overrides) {

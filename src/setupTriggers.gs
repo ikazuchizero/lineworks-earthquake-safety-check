@@ -14,7 +14,7 @@ function setupTriggers() {
 
     ScriptApp.newTrigger("checkAndNotifyEarthquake")
         .timeBased()
-        .everyMinutes(1)
+        .everyMinutes(CHECK_INTERVAL_MINUTES)
         .create();
 
     ScriptApp.newTrigger("writeHourlyHealthCheck")
@@ -23,10 +23,12 @@ function setupTriggers() {
         .create();
 
     // GAS APIではトリガーの実行間隔を取得できないため、設定した間隔を保存する
-    properties.setProperty(PROPERTY_KEYS.checkIntervalMinutes, "1");
+    properties.setProperty(PROPERTY_KEYS.checkIntervalMinutes, String(CHECK_INTERVAL_MINUTES));
     properties.setProperty(PROPERTY_KEYS.healthIntervalHours, "1");
 
     console.log(
-        "トリガーを設定しました: checkAndNotifyEarthquake（1分ごと）, writeHourlyHealthCheck（1時間ごと）"
+        "トリガーを設定しました: checkAndNotifyEarthquake（" +
+            CHECK_INTERVAL_MINUTES +
+            "分ごと）, writeHourlyHealthCheck（1時間ごと）"
     );
 }

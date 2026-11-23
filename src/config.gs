@@ -1,5 +1,10 @@
 // 設定値とスクリプトプロパティのキーを管理するファイル
 
+// 地震確認トリガーの実行間隔（分）。GAS で指定できる値は 1 / 5 / 10 / 15 / 30
+// P2PQuake は Cloudflare のレート制限（HTTP 429 / error 1015）を返すことがあり、
+// GAS は共有IPからアクセスするため短い間隔ほど巻き込まれやすい
+const CHECK_INTERVAL_MINUTES = 5;
+
 const CONFIG = {
     // 通知する震度の下限（P2PQuakeのmaxScaleコード）は NOTIFY_SCALE で必須設定する
     // 震源不明（UNKNOWN）の続報を待つ秒数
@@ -10,8 +15,8 @@ const CONFIG = {
     quietHoursEnd: 6,
     // P2PQuakeから取得する件数（1件だけだと通知対象を見落とす）
     p2pquakeLimit: 10,
-    // 1時間あたりの想定実行回数（1分トリガーなら60）
-    expectedRunsPerHour: 60,
+    // 1時間あたりの想定実行回数（CHECK_INTERVAL_MINUTES から算出。5分なら12）
+    expectedRunsPerHour: Math.round(60 / CHECK_INTERVAL_MINUTES),
     // 地震発生からこの時間を超えた情報は通知しない（長期間停止後の誤通知防止）
     maxNotificationAgeHours: 24,
     // 状態シートに残す日数
