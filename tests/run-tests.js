@@ -1036,6 +1036,45 @@ test("セットアップ確認: 固定URLのGoogleフォームは回答受付を
     assert.equal(gas.setupCheck(), false);
 });
 
+test("通常時間帯: 保留期限切れの回に続報が来たら震源地ありを通知する", () => {
+    resetWorld();
+    world.properties.NOTIFY_SCALE = "0";
+    const config = gas.loadConfig(properties);
+    const context = gas.getExecutionContext(config, properties);
+    const state = gas.createEmptyState();
+    const eventTime = "2026/11/23 07:49:00";
+    const firstSeen = Utilities.parseDate(
+        "2026/11/23 07:51:00",
+        "Asia/Tokyo",
+        "yyyy/MM/dd HH:mm:ss"
+    );
+
+    // 1回目: 第1報（震源不明）
+    const firstTargets = gas.selectNotificationTargets(
+        [testEvent(eventTime, "", 30)],
+        state,
+        config,
+        firstSeen,
+        context
+    );
+
+    assert.equal(firstTargets.length, 0);
+    assert.ok(!!state.pendingUnknown[eventTime]);
+
+    // 2回目: 10分後、同じ発生時刻の詳細報（震源地名あり）が届いている
+    const secondTargets = gas.selectNotificationTargets(
+        [testEvent(eventTime, "宮古島", 30), testEvent(eventTime, "", 30)],
+        state,
+        config,
+        new Date(firstSeen.getTime() + 11 * 60 * 1000),
+        context
+    );
+
+    assert.equal(secondTargets.length, 1);
+    assert.equal(secondTargets[0].hypocenterName, "宮古島");
+    assert.equal(secondTargets[0].maxScale, 30);
+});
+
 test("メッセージ: 震源不明はUNKNOWNと表示せず「調査中」にする", () => {
     const message = gas.createEarthquakeMessage(
         { earthquakeTime: "2026/11/23 07:49:00", hypocenterName: "UNKNOWN", maxScale: 30 },
