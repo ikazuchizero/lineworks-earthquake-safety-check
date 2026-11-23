@@ -63,6 +63,7 @@ GAS エディタの「プロジェクトの設定」→「スクリプト プロ
 | `QUIET_HOURS_END` | 任意 | 静穏時間の終了（0〜23）。既定 `6` |
 | `MAX_NOTIFICATION_AGE_HOURS` | 任意 | 発生からこの時間を超えた地震は通知しない。既定 `24` |
 | `LOG_RETENTION_DAYS` | 任意 | `地震ログ` を残す日数。既定 `90` |
+| `ALLOW_BASELINE_WITH_TRIGGERS` | 任意 | 稼働中トリガーがある状態でベースラインを実行する場合だけ `true` |
 
 震度コードは `0, 10, 20, 30, 40, 45, 50, 55, 60, 70` のいずれかです。`NOTIFY_SCALE` は PHP 版と同じく必須で、未設定なら処理を開始しません。
 
@@ -84,7 +85,9 @@ GAS エディタで次の関数を順に実行します。
 `initializeNotificationBaseline` は、セットアップ直前に発生していた地震を「先ほど発生」として通知しないための関数です。
 
 - 現在のP2PQuake取得結果（最大10件）を、送信せずに通知済みとして記録します
-- 既存の保留UNKNOWN・静穏バッチもクリアします
+- 既存の保留UNKNOWN・静穏バッチ・解放待ちもクリアします
+- 稼働中のトリガーがある場合は、既定で実行を拒否します。直前に起きた地震を通知済みにしてしまう事故を防ぐためです
+- 意図的に実行する場合だけ `ALLOW_BASELINE_WITH_TRIGGERS=true` を設定してください
 - **通常運用では実行しないでください**。実行すると、その時点の最新地震が通知されなくなります
 - 移行時に過去地震を通知したい場合は実行せず、`setupCheck` 後にそのまま `setupTriggers` へ進みます
 
@@ -131,7 +134,7 @@ checkAndNotifyEarthquake
 - 通知済み状態は LINE WORKS 送信成功後に保存します。送信前に保存すると通知漏れになるためです。
 - `MAX_NOTIFICATION_AGE_HOURS` を超えた地震は通知しません。長期間トリガーが止まった後の再開時に、数日前の地震を「先ほど発生」として送らないためです。
 - フォームのコピー名は `安否確認 yyyyMMdd-HHmmss` で地震ごとに一意です。コピー直後に状態保存が失敗しても、次回は同じ名前のフォームを Drive から探して再利用します。
-- 保存済みフォームが削除・ゴミ箱移動されていた場合は、状態を捨てて同じ名前で複製し直します。
+- 保存済みフォームが開けない場合は一度再試行し、それでも失敗したときだけ削除・複製し直します。一時的なAPIエラーで不要なコピーを増やさないためです。
 
 ### 送信結果が不明な場合（再送ポリシー）
 
@@ -146,6 +149,7 @@ checkAndNotifyEarthquake
 - 震源地名が空の情報は即通知せず、`UNKNOWN_HYPOCENTER_HOLD_SECONDS` 秒だけ待ちます。
 - 待機中に同じ発生時刻の震源地名あり情報が来たら、そちらを通知します。
 - 期限を過ぎても震源地名あり情報が来ない場合だけ、UNKNOWN のまま1回通知します。
+- `UNKNOWN_HYPOCENTER_HOLD_SECONDS` は `MAX_NOTIFICATION_AGE_HOURS` より短くしてください。長いと、保留期限が来る前に古い情報として整理されます。
 
 ### 静穏時間
 
@@ -199,15 +203,19 @@ node tests/run-tests.js
 - 状態シートの往復・保持期間・件数上限・静穏解放待ち
 - 変化がない実行で状態シートを書き換えないこと
 - 初回ベースラインが送信せず通知済みにすること
+- 稼働中トリガーがあるベースラインを拒否し、フラグ付きなら許可すること
 - 古い地震・古い静穏バッチ・古い保留UNKNOWNを通知しないこと
+- 保留UNKNOWNの期限切れと同じ実行の続報が来たら震源地ありを優先すること
+- 保留時間が最大経過時間以上なら設定エラーにすること
 - フォーム複製→公開→送信→状態保存と、再実行時の再送なし
 - コピー直後に中断した場合のフォーム再利用
 - 保存済みフォームが削除された場合の再作成
+- 保存済みフォームの一時的なオープン失敗は再試行し、複製しないこと
 - 送信結果不明マークがある場合の再送（attempt の増加）
 - 固定フォーム URL モード（複製なし、編集URLの回答受付確認）
 - 旧4列ログの見出し更新
 - API 失敗時の障害通知・エラーログ・失敗カウント
-- ヘルスチェックの正常動作率上限・実行成功率・スキップ数・ログ整理
+- ヘルスチェックの正常動作率上限・実行成功率・スキップ数・カウンタロック・ログ整理
 - `NOTIFY_SCALE` 必須・プレースホルダー拒否・https以外のURL拒否・API URL 上書き
 - 疎通確認の通知用・保守用の2送信
 - 障害通知 fingerprint の例外名の反映
@@ -259,7 +267,7 @@ GAS 版は PHP 版の「フォーム URL 在庫管理」を移植せず、**地�
 
 ### テストについて
 
-PHP 版 `codex/setup-check` のテストは 39 件（`ConfigTest` 4、`ConnectivityCheckerTest` 2、`EarthquakeCheckerTest` 11、`ErrorNotificationStoreTest` 2、`FailureNotifierTest` 3、`FormStockStoreTest` 2、`HealthCheckerTest` 1、`LineWorksClientTest` 1、`LoggerTest` 1、`P2PQuakeClientTest` 2、`SetupCheckerTest` 7、`StateStoreTest` 2、`TestRegistryTest` 1）です。GAS 版は PHP のテストをそのまま流用できないため、同等の判定を `runSelfTests` と `tests/run-tests.js`（30件）で個別に検証します。フォーム在庫関連のテストは、在庫管理を行わない設計のため対象外です。
+PHP 版 `codex/setup-check` のテストは 39 件（`ConfigTest` 4、`ConnectivityCheckerTest` 2、`EarthquakeCheckerTest` 11、`ErrorNotificationStoreTest` 2、`FailureNotifierTest` 3、`FormStockStoreTest` 2、`HealthCheckerTest` 1、`LineWorksClientTest` 1、`LoggerTest` 1、`P2PQuakeClientTest` 2、`SetupCheckerTest` 7、`StateStoreTest` 2、`TestRegistryTest` 1）です。GAS 版は PHP のテストをそのまま流用できないため、同等の判定を `runSelfTests` と `tests/run-tests.js`（36件）で個別に検証します。フォーム在庫関連のテストは、在庫管理を行わない設計のため対象外です。
 
 ## ファイル構成
 
@@ -310,7 +318,7 @@ PHP 版 `codex/setup-check` のテストは 39 件（`ConfigTest` 4、`Connectiv
 - 実フォーム URL、room_id、bot_id、token、secret、秘密鍵はログや README に書かないでください。
 - 自動複製モードでは、地震ごとにフォームのコピーが Drive に増えます。定期的に不要なコピーを整理してください。固定 URL モードではコピーを作りません。
 - フォーム複製直後に中断した場合は、次回同じ名前のコピーを再利用します。Drive の検索反映が遅れた場合に限り、未使用のコピーが残ることがあります（通知の重複は発生しません）。
-- 保存済みフォームが削除・ゴミ箱移動されていた場合は、状態を捨てて同じ名前で複製し直します。
+- 保存済みフォームが開けない場合は一度再試行し、それでも失敗したときだけ削除・複製し直します。一時的なAPIエラーで不要なコピーを増やさないためです。
 - 送信後に状態保存が失敗した場合は、次回に同じ地震を再送する可能性があります（at-least-once）。ログの `attempt=` で再送かどうかを確認できます。
 - `状態` シートの 500 件上限は「通知済み」と「フォーム履歴」にそれぞれ適用されます（状態全体で 500 件ではありません）。保留・送信中・静穏状態は `MAX_NOTIFICATION_AGE_HOURS`（既定24時間）で整理されます。
 - ロック取得に失敗した実行は `スキップ数` に記録され、成功・失敗のどちらにもカウントされません。

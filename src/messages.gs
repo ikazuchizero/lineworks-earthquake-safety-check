@@ -13,6 +13,10 @@ const ERROR_MESSAGES = {
     quietHoursSame: "QUIET_HOURS_STARTとQUIET_HOURS_ENDは別の値にしてください",
     maxNotificationAgeInvalid: "MAX_NOTIFICATION_AGE_HOURSは1以上で設定してください",
     logRetentionInvalid: "LOG_RETENTION_DAYSは1以上で設定してください",
+    unknownHoldExceedsMaxAge:
+        "UNKNOWN_HYPOCENTER_HOLD_SECONDSはMAX_NOTIFICATION_AGE_HOURSより短くしてください",
+    baselineTriggersActive:
+        "定期実行が登録された状態ではベースラインを作成できません。setupTriggersの前に実行するか、意図的に実行する場合だけ ALLOW_BASELINE_WITH_TRIGGERS=true を設定してください",
 
     botIdMissing: "BOT_ID未設定",
     roomIdMissing: "ROOM_ID未設定",

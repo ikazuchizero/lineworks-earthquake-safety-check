@@ -16,60 +16,73 @@ function writeHourlyHealthCheck() {
         const spreadsheet = getSpreadsheet(properties);
         const sheet = getOrCreateSheet(spreadsheet, SHEET_NAMES.health, HEALTH_HEADERS);
 
-        const nowTime = new Date();
-        const periodStartTime = Number(
-            properties.getProperty(PROPERTY_KEYS.healthPeriodStartTime) || Date.now()
-        );
-        const successCount = Number(
-            properties.getProperty(PROPERTY_KEYS.healthSuccessCount) || 0
-        );
-        const failureCount = Number(
-            properties.getProperty(PROPERTY_KEYS.healthFailureCount) || 0
-        );
-        const skippedCount = Number(
-            properties.getProperty(PROPERTY_KEYS.healthSkippedCount) || 0
-        );
+        // スキップ記録はスクリプトロックを取れないときに走るため、
+        // カウンタの read/append/reset をユーザーロックで直列化する
+        const counterLock = LockService.getUserLock();
 
-        const expectedCount = CONFIG.expectedRunsPerHour;
-        const totalCount = successCount + failureCount;
-        // 予定回数を超えた場合や、ヘルスチェック自体がスキップされた時間が
-        // 含まれる場合でも100%を超えないようにする
-        const successRate =
-            expectedCount === 0 ? 0 : Math.min(successCount / expectedCount, 1);
-        // 実際に実行できた回数に対する成功率（ロック競合の影響を除く）
-        const executionSuccessRate =
-            totalCount === 0 ? 0 : successCount / totalCount;
+        if (!counterLock.tryLock(HEALTH_COUNTER_LOCK_WAIT_MS)) {
+            console.warn("ヘルスカウンタのロックが取れませんでした");
+            return;
+        }
 
-        const lastSuccessTime = formatHealthTime(
-            properties.getProperty(PROPERTY_KEYS.healthLastSuccessTime)
-        );
-        const lastErrorTime = formatHealthTime(
-            properties.getProperty(PROPERTY_KEYS.healthLastErrorTime)
-        );
-        const lastErrorMessage =
-            properties.getProperty(PROPERTY_KEYS.healthLastErrorMessage) || "";
+        try {
+            const nowTime = new Date();
+            const periodStartTime = Number(
+                properties.getProperty(PROPERTY_KEYS.healthPeriodStartTime) || Date.now()
+            );
+            const successCount = Number(
+                properties.getProperty(PROPERTY_KEYS.healthSuccessCount) || 0
+            );
+            const failureCount = Number(
+                properties.getProperty(PROPERTY_KEYS.healthFailureCount) || 0
+            );
+            const skippedCount = Number(
+                properties.getProperty(PROPERTY_KEYS.healthSkippedCount) || 0
+            );
 
-        sheet.appendRow([
-            nowTime,
-            new Date(periodStartTime),
-            nowTime,
-            expectedCount,
-            totalCount,
-            successCount,
-            failureCount,
-            successRate,
-            lastSuccessTime,
-            lastErrorTime,
-            lastErrorMessage,
-            skippedCount,
-            executionSuccessRate,
-        ]);
+            const expectedCount = CONFIG.expectedRunsPerHour;
+            const totalCount = successCount + failureCount;
+            // 予定回数を超えた場合や、ヘルスチェック自体がスキップされた時間が
+            // 含まれる場合でも100%を超えないようにする
+            const successRate =
+                expectedCount === 0 ? 0 : Math.min(successCount / expectedCount, 1);
+            // 実際に実行できた回数に対する成功率（ロック競合の影響を除く）
+            const executionSuccessRate =
+                totalCount === 0 ? 0 : successCount / totalCount;
 
-        const lastRow = sheet.getLastRow();
-        sheet.getRange(lastRow, 8).setNumberFormat("0.0%");
-        sheet.getRange(lastRow, 13).setNumberFormat("0.0%");
+            const lastSuccessTime = formatHealthTime(
+                properties.getProperty(PROPERTY_KEYS.healthLastSuccessTime)
+            );
+            const lastErrorTime = formatHealthTime(
+                properties.getProperty(PROPERTY_KEYS.healthLastErrorTime)
+            );
+            const lastErrorMessage =
+                properties.getProperty(PROPERTY_KEYS.healthLastErrorMessage) || "";
 
-        resetHealthCounters(properties);
+            sheet.appendRow([
+                nowTime,
+                new Date(periodStartTime),
+                nowTime,
+                expectedCount,
+                totalCount,
+                successCount,
+                failureCount,
+                successRate,
+                lastSuccessTime,
+                lastErrorTime,
+                lastErrorMessage,
+                skippedCount,
+                executionSuccessRate,
+            ]);
+
+            const lastRow = sheet.getLastRow();
+            sheet.getRange(lastRow, 8).setNumberFormat("0.0%");
+            sheet.getRange(lastRow, 13).setNumberFormat("0.0%");
+
+            resetHealthCounters(properties);
+        } finally {
+            counterLock.releaseLock();
+        }
 
         try {
             cleanupLogsIfDue(properties, spreadsheet);

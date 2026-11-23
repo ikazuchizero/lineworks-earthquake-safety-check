@@ -104,7 +104,27 @@ function selectNotificationTargets(events, state, config, now, context) {
     // 前回の実行で解放したが、送信結果が確定していない静穏通知を再試行する
     if (state.quietRelease) {
         const release = state.quietRelease;
-        const released = release.candidate;
+        let released = release.candidate;
+
+        // 解放待ちの時間帯に、より良い続報が同じ実行で届いていれば
+        // 通知対象を決める前に差し替える（UNKNOWN→震源地あり等）
+        if (released && released.earthquakeTime) {
+            for (const entry of quietCandidates) {
+                if (
+                    String(entry.window.windowStart) === String(release.windowStart) &&
+                    isBetterQuietCandidate(entry.candidate, released)
+                ) {
+                    released = Object.assign({}, entry.candidate);
+                }
+            }
+
+            if (released !== release.candidate) {
+                state.quietRelease = Object.assign({}, release, {
+                    candidate: released,
+                });
+                markStateChanged(state);
+            }
+        }
 
         if (!released || !released.earthquakeTime) {
             state.quietRelease = null;

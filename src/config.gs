@@ -100,6 +100,7 @@ const PROPERTY_KEYS = {
     quietHoursEnd: "QUIET_HOURS_END",
     maxNotificationAgeHours: "MAX_NOTIFICATION_AGE_HOURS",
     logRetentionDays: "LOG_RETENTION_DAYS",
+    allowBaselineWithTriggers: "ALLOW_BASELINE_WITH_TRIGGERS",
     lastRoutineLogTime: "LAST_ROUTINE_LOG_TIME",
     lastLogCleanupAt: "LOG_LAST_CLEANUP_AT",
     failureFingerprint: "FAILURE_NOTIFY_FINGERPRINT",
@@ -207,6 +208,11 @@ function loadConfig(properties) {
 
     if (maxNotificationAgeHours <= 0) {
         throw new Error(ERROR_MESSAGES.maxNotificationAgeInvalid);
+    }
+
+    // 保留期限が最大経過時間以上だと、期限切れ前に古い情報として消える
+    if (unknownHypocenterHoldSeconds >= maxNotificationAgeHours * 60 * 60) {
+        throw new Error(ERROR_MESSAGES.unknownHoldExceedsMaxAge);
     }
 
     const logRetentionDays = readIntegerProperty(

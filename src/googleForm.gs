@@ -16,17 +16,23 @@ function resolveFormForNotification(context, state, target) {
     if (record && record.formId) {
         try {
             form = FormApp.openById(record.formId);
-        } catch (e) {
-            // フォームが削除・ゴミ箱移動された場合は、状態を捨てて作り直す。
-            // これをしないと同じフォームIDで永久に失敗し続ける。
-            console.error(
-                "保存済みフォームを開けないため再作成します: " + e.message
-            );
-            failedFormId = record.formId;
-            delete state.forms[earthquakeTime];
-            markStateChanged(state);
-            record = null;
-            form = null;
+        } catch (firstError) {
+            // 一時的なAPIエラーと削除を区別するため、一度だけ再試行する
+            try {
+                Utilities.sleep(500);
+                form = FormApp.openById(record.formId);
+            } catch (e) {
+                // フォームが削除・ゴミ箱移動された場合は、状態を捨てて作り直す。
+                // これをしないと同じフォームIDで永久に失敗し続ける。
+                console.error(
+                    "保存済みフォームを開けないため再作成します: " + e.message
+                );
+                failedFormId = record.formId;
+                delete state.forms[earthquakeTime];
+                markStateChanged(state);
+                record = null;
+                form = null;
+            }
         }
     }
 

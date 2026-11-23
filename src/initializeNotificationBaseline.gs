@@ -10,6 +10,29 @@ function initializeNotificationBaseline() {
 
     try {
         const properties = PropertiesService.getScriptProperties();
+        const allowWithTriggers = readBooleanProperty(
+            properties,
+            PROPERTY_KEYS.allowBaselineWithTriggers,
+            false
+        );
+
+        // 稼働中のトリガーがある状態で実行すると、直前の地震を
+        // 「通知済み」にして送らない事故につながるため、既定では拒否する
+        if (!allowWithTriggers) {
+            const activeTriggers = ScriptApp.getProjectTriggers().filter(function (trigger) {
+                const handler = trigger.getHandlerFunction();
+
+                return (
+                    handler === "checkAndNotifyEarthquake" ||
+                    handler === "writeHourlyHealthCheck"
+                );
+            });
+
+            if (activeTriggers.length > 0) {
+                throw new Error(ERROR_MESSAGES.baselineTriggersActive);
+            }
+        }
+
         const config = loadConfig(properties);
         const context = getExecutionContext(config, properties);
         const state = loadState(context);
@@ -54,6 +77,7 @@ function initializeNotificationBaseline() {
         state.pendingUnknown = {};
         state.quietBatch = null;
         state.quietRelease = null;
+        state.quietCompletedThrough = null;
         markStateChanged(state);
 
         saveState(context, state);

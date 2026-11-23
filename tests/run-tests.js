@@ -86,6 +86,7 @@ const Utilities = {
     computeRsaSha256Signature() {
         return [1, 2, 3, 4];
     },
+    sleep() {},
     computeDigest(algorithm, value) {
         return Array.from(
             require("crypto")
@@ -103,6 +104,7 @@ const world = {
     driveFiles: new Map(),
     forms: {},
     failFormIds: new Set(),
+    failFormOnceIds: new Set(),
     copiedFormNames: [],
     sentMessages: [],
     sentRooms: [],
@@ -113,6 +115,7 @@ const world = {
     earthquakeStatus: 200,
     sendStatus: 204,
     lockAvailable: true,
+    userLockAvailable: true,
     tokenRequests: 0,
 };
 
@@ -271,6 +274,11 @@ function makeForm(id) {
         throw new Error("form not found: " + id);
     }
 
+    if (world.failFormOnceIds.has(id)) {
+        world.failFormOnceIds.delete(id);
+        throw new Error("temporary form error: " + id);
+    }
+
     const state = world.forms[id] || {};
 
     return {
@@ -335,6 +343,10 @@ const UrlFetchApp = {
 const LockService = {
     getScriptLock: () => ({
         tryLock: () => world.lockAvailable,
+        releaseLock: () => {},
+    }),
+    getUserLock: () => ({
+        tryLock: () => world.userLockAvailable,
         releaseLock: () => {},
     }),
 };
@@ -412,6 +424,7 @@ function resetWorld(options) {
     world.driveFiles = new Map();
     world.forms = {};
     world.failFormIds = new Set();
+    world.failFormOnceIds = new Set();
     world.copiedFormNames = [];
     world.sentMessages = [];
     world.sentRooms = [];
@@ -422,6 +435,7 @@ function resetWorld(options) {
     world.earthquakeStatus = 200;
     world.sendStatus = 204;
     world.lockAvailable = true;
+    world.userLockAvailable = true;
     world.tokenRequests = 0;
 
     if (!opts.withoutConfig) {
@@ -1169,6 +1183,155 @@ test("静穏通知: 送信失敗時は解放待ちを残して再試行する", 
     assert.ok(after.quietRelease);
     assert.equal(after.quietRelease.candidate.dedupeKey, eventTime + "|東京湾");
     assert.equal(after.notified[eventTime + "|東京湾"], undefined);
+});
+
+test("ベースライン: 稼働中のトリガーがあると拒否し、フラグで許可する", () => {
+    resetWorld();
+    world.triggers = [
+        { getHandlerFunction: () => "checkAndNotifyEarthquake" },
+    ];
+
+    assert.throws(() => gas.initializeNotificationBaseline(), /ベースライン/);
+    assert.equal(world.sentMessages.length, 0);
+
+    world.properties.ALLOW_BASELINE_WITH_TRIGGERS = "true";
+    world.earthquakeResponse = [testEvent(daytimeEventTime(), "東京湾", 45)];
+
+    assert.equal(gas.initializeNotificationBaseline(), 1);
+});
+
+test("ベースライン: 保留・静穏状態もクリアする", () => {
+    resetWorld();
+    const eventTime = daytimeEventTime();
+    const recent = Utilities.formatDate(
+        new Date(Date.now() - 60 * 60 * 1000),
+        "Asia/Tokyo",
+        "yyyy/MM/dd HH:mm:ss"
+    );
+    world.earthquakeResponse = [testEvent(eventTime, "東京湾", 45)];
+
+    const { context, state } = currentState();
+    state.pendingUnknown[recent] = {
+        earthquakeTime: recent,
+        hypocenterName: "UNKNOWN",
+        maxScale: 45,
+        firstSeenAt: new Date().toISOString(),
+    };
+    state.quietBatch = {
+        windowStart: "2026-01-01T15:00:00.000Z",
+        windowEnd: "2026-01-01T21:00:00.000Z",
+        candidate: { earthquakeTime: recent },
+    };
+    state.quietRelease = {
+        windowStart: "2026-01-01T15:00:00.000Z",
+        windowEnd: "2026-01-01T21:00:00.000Z",
+        candidate: { earthquakeTime: recent },
+    };
+    state.quietCompletedThrough = "2099-01-01T00:00:00.000Z";
+    gas.saveState(context, state);
+
+    gas.initializeNotificationBaseline();
+
+    const { state: after } = currentState();
+    assert.equal(Object.keys(after.pendingUnknown).length, 0);
+    assert.equal(after.quietBatch, null);
+    assert.equal(after.quietRelease, null);
+    assert.equal(after.quietCompletedThrough, null);
+});
+
+test("静穏通知: 保留期限切れと同じ実行の続報は震源地ありを優先する", () => {
+    resetWorld();
+    const config = gas.loadConfig(properties);
+    const context = gas.getExecutionContext(config, properties);
+    const state = gas.createEmptyState();
+    const today = Utilities.formatDate(new Date(), "Asia/Tokyo", "yyyy/MM/dd");
+    const start = Utilities.parseDate(
+        today + " 00:00:00",
+        "Asia/Tokyo",
+        "yyyy/MM/dd HH:mm:ss"
+    );
+    const end = new Date(start.getTime() + 6 * 60 * 60 * 1000);
+    const eventTime = today + " 05:55:00";
+
+    state.quietRelease = {
+        windowStart: start.toISOString(),
+        windowEnd: end.toISOString(),
+        candidate: {
+            earthquakeTime: eventTime,
+            hypocenterName: "UNKNOWN",
+            maxScale: 45,
+            dedupeKey: eventTime + "|UNKNOWN",
+        },
+    };
+    state.pendingUnknown[eventTime] = {
+        earthquakeTime: eventTime,
+        hypocenterName: "UNKNOWN",
+        maxScale: 45,
+        firstSeenAt: Utilities.parseDate(
+            today + " 05:56:00",
+            "Asia/Tokyo",
+            "yyyy/MM/dd HH:mm:ss"
+        ).toISOString(),
+    };
+
+    const targets = gas.selectNotificationTargets(
+        [testEvent(eventTime, "東京湾", 50)],
+        state,
+        config,
+        Utilities.parseDate(
+            today + " 06:11:00",
+            "Asia/Tokyo",
+            "yyyy/MM/dd HH:mm:ss"
+        ),
+        context
+    );
+
+    assert.equal(targets.length, 1);
+    assert.equal(targets[0].hypocenterName, "東京湾");
+    assert.equal(state.quietRelease.candidate.hypocenterName, "東京湾");
+});
+
+test("設定: 保留時間は最大経過時間より短くなければならない", () => {
+    resetWorld();
+    world.properties.MAX_NOTIFICATION_AGE_HOURS = "1";
+    world.properties.UNKNOWN_HYPOCENTER_HOLD_SECONDS = "3600";
+
+    assert.throws(() => gas.loadConfig(properties), /UNKNOWN_HYPOCENTER_HOLD_SECONDS/);
+});
+
+test("フォーム: 一時的なオープン失敗は再試行し、複製しない", () => {
+    resetWorld();
+    const eventTime = daytimeEventTime();
+    world.earthquakeResponse = [testEvent(eventTime, "東京湾", 45)];
+
+    const { context, state } = currentState();
+    state.forms[eventTime] = {
+        formId: "temporary",
+        responderUrl: "https://forms.example/temporary",
+        createdAt: new Date().toISOString(),
+    };
+    gas.saveState(context, state);
+    world.failFormOnceIds.add("temporary");
+
+    gas.checkAndNotifyEarthquake();
+
+    assert.equal(world.copiedFormNames.length, 0);
+    assert.ok(world.sentMessages[0].indexOf("https://forms.example/temporary") !== -1);
+
+    const { state: after } = currentState();
+    assert.equal(after.forms[eventTime].formId, "temporary");
+});
+
+test("ヘルスチェック: カウンタ用ユーザーロックが取れない場合は記録しない", () => {
+    resetWorld();
+    world.userLockAvailable = false;
+    world.properties.HEALTH_SUCCESS_COUNT = "10";
+
+    gas.writeHourlyHealthCheck();
+
+    const rows = world.sheets["ヘルスチェック"].data;
+    assert.equal(rows.length, 1);
+    assert.equal(world.properties.HEALTH_SUCCESS_COUNT, "10");
 });
 
 // ---------------------------------------------------------------- Runner
