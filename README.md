@@ -79,7 +79,7 @@ GAS エディタで次の関数を順に実行します。
 
 1. `setupCheck` … 設定・シート・テンプレート（または固定 URL）・秘密鍵を確認（トリガー未登録のため `triggers` はNGで構いません）
 2. `initializeNotificationBaseline` … **初回導入時のみ**。現在APIが返す地震を「通知済み」として記録（送信なし）
-3. `setupTriggers` … 5分ごとの地震確認と1時間ごとのヘルスチェックを登録
+3. `setupTriggers` … 10分ごとの地震確認と1時間ごとのヘルスチェックを登録
 4. `setupCheck` … もう一度実行し、すべて `OK` になることを確認
 5. `connectivityCheck` … 通知用チャットへ疎通確認メッセージを送信。`MAINTENANCE_ROOM_ID` が別なら保守通知用にも送信
 6. `runSelfTests` … 外部通信なしで判定ロジックを確認
@@ -169,12 +169,12 @@ checkAndNotifyEarthquake
 
 `setupTriggers` で以下を登録します。
 
-- `checkAndNotifyEarthquake`: `CHECK_INTERVAL_MINUTES` ごと（既定5分）
+- `checkAndNotifyEarthquake`: `CHECK_INTERVAL_MINUTES` ごと（既定10分）
 - `writeHourlyHealthCheck`: 1時間ごと
 
-GAS で指定できる間隔は 1 / 5 / 10 / 15 / 30 分です。既定は `src/config.gs` の `CHECK_INTERVAL_MINUTES = 5` で、`ヘルスチェック` の「予定実行回数」はここから自動算出されます（5分なら12）。間隔を変えるときは `CHECK_INTERVAL_MINUTES` を書き換えて `setupTriggers` を再実行してください。
+GAS で指定できる間隔は 1 / 5 / 10 / 15 / 30 分です。既定は `src/config.gs` の `CHECK_INTERVAL_MINUTES = 10` で、`ヘルスチェック` の「予定実行回数」はここから自動算出されます（10分なら6）。間隔を変えるときは `CHECK_INTERVAL_MINUTES` を書き換えて `setupTriggers` を再実行してください。
 
-5分にしているのは P2PQuake が Cloudflare のレート制限（HTTP 429 / error 1015）を返すことがあり、GAS の共有IPでは短い間隔ほど巻き込まれやすいためです。地震発生から通知までの遅れは最大で約5分になります。
+10分にしているのは、P2PQuake が Cloudflare のレート制限（HTTP 429 / error 1015）を返すことがあり、GAS の共有IPでは短い間隔ほど巻き込まれやすいためです。あわせて、gmail.com アカウントのトリガー実行時間（90分/日）に対しても余裕を確保しています（10分・1回5秒で約12分/日）。地震発生から通知までの遅れは最大で約10分になります。
 
 `setupCheck` は各トリガーが1つだけ存在することと、`setupTriggers` が保存した実行間隔（`CHECK_INTERVAL_MINUTES`・1時間）を確認します。GAS の API からはトリガーの実行間隔を直接取得できないため、実際の間隔は GAS エディタの「トリガー」画面でも確認してください。
 
@@ -184,7 +184,7 @@ GAS で指定できる間隔は 1 / 5 / 10 / 15 / 30 分です。既定は `src/
 - ロックが取れずスキップした実行は `スキップ数` に記録します。ヘルスチェック自体がスキップした時間帯は、次回の集計にまとめて含まれます（「対象開始」で判別できます）。
 - `正常動作率` は `成功数 / 予定実行回数` です。ロック競合を含む「予定に対する稼働率」で、100%を超えないよう上限を設けています。
 - `実行成功率` は `成功数 / (成功数 + 失敗数)` です。実際に実行できた回数に対する成功率で、ロック競合の影響を除いて見たい場合はこちらを使います。
-- 予定回数は `CHECK_INTERVAL_MINUTES` から算出されます（5分なら12）。間隔を変えた場合は `setupTriggers` を再実行してください。
+- 予定回数は `CHECK_INTERVAL_MINUTES` から算出されます（10分なら6）。間隔を変えた場合は `setupTriggers` を再実行してください。
 - ヘルスチェックの実行時に、前回から24時間以上経過していれば `地震ログ` を `LOG_RETENTION_DAYS` 日で整理します。
 
 ## テスト
