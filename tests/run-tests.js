@@ -1036,6 +1036,52 @@ test("セットアップ確認: 固定URLのGoogleフォームは回答受付を
     assert.equal(gas.setupCheck(), false);
 });
 
+test("状態: シートがキーを日時として保存しても重複排除できる", () => {
+    resetWorld();
+    world.properties.NOTIFY_SCALE = "0";
+    const config = gas.loadConfig(properties);
+    const context = gas.getExecutionContext(config, properties);
+
+    // Sheets が "2026/11/23 07:49:00" を日時として保存してしまった状態を再現する
+    const rows = [
+        ["種別", "キー", "値", "更新日時"],
+        [
+            "notified_time",
+            Utilities.parseDate(
+                "2026/11/23 07:49:00",
+                "Asia/Tokyo",
+                "yyyy/MM/dd HH:mm:ss"
+            ),
+            JSON.stringify({
+                dedupeKey: "2026/11/23 07:49:00|天草灘",
+                notifiedAt: "2026-11-23T14:14:05.596Z",
+            }),
+            "2026-11-23T14:50:12.145Z",
+        ],
+    ];
+    context.stateSheet.data.length = 0;
+    rows.forEach((row) => context.stateSheet.data.push(row));
+
+    const state = gas.loadState(context);
+    assert.ok(!!state.notifiedByTime["2026/11/23 07:49:00"]);
+
+    // 同じ発生時刻の別報（UNKNOWN）を取得しても保留・通知しない
+    const targets = gas.selectNotificationTargets(
+        [testEvent("2026/11/23 07:49:00", "", 30)],
+        state,
+        config,
+        Utilities.parseDate(
+            "2026/11/23 23:40:00",
+            "Asia/Tokyo",
+            "yyyy/MM/dd HH:mm:ss"
+        ),
+        context
+    );
+
+    assert.equal(targets.length, 0);
+    assert.equal(Object.keys(state.pendingUnknown).length, 0);
+});
+
 test("通常時間帯: 保留期限切れの回に続報が来たら震源地ありを通知する", () => {
     resetWorld();
     world.properties.NOTIFY_SCALE = "0";

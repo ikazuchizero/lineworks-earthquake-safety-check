@@ -36,7 +36,7 @@ function loadState(context) {
     for (let i = 0; i < values.length; i++) {
         const row = values[i];
         const type = String(row[0] || "").trim();
-        const key = String(row[1] || "").trim();
+        const key = normalizeStateKey(row[1]);
         const raw = row[2];
 
         if (type === "" || key === "") {
@@ -81,6 +81,16 @@ function loadState(context) {
     state.dirty = false;
 
     return state;
+}
+
+function normalizeStateKey(value) {
+    if (value instanceof Date) {
+        return isNaN(value.getTime())
+            ? ""
+            : Utilities.formatDate(value, "Asia/Tokyo", "yyyy/MM/dd HH:mm:ss");
+    }
+
+    return String(value === null || value === undefined ? "" : value).trim();
 }
 
 function parseStateJson(raw, type, key, rowNumber) {
@@ -198,6 +208,10 @@ function writeStateRows(sheet, rows) {
     const existingRows = Math.max(sheet.getLastRow() - 1, 0);
 
     if (rows.length > 0) {
+        // キー列を文字列に固定する。Sheets は "2026/11/23 07:49:00" のような
+        // 値を日時として解釈し、読み戻すとロケール依存の Date 文字列になるため、
+        // 実行環境によってキーが一致しなくなるのを防ぐ
+        sheet.getRange(2, 2, rows.length, 1).setNumberFormat("@");
         sheet.getRange(2, 1, rows.length, STATE_HEADERS.length).setValues(rows);
     }
 
