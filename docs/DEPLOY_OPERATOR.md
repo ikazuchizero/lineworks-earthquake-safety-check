@@ -14,8 +14,11 @@ PC 側の環境を汚さずに実行できます。`npx` を使うので Cloud S
 | 項目 | 値 |
 |---|---|
 | リポジトリ | `https://github.com/ikazuchizero/lineworks-earthquake-safety-check.git`（public） |
-| ブランチ | `main` |
+| ブランチ | `codex/deploy-operator-guide`（本番用） |
 | 反映されるファイル | `src/` 以下 **`.gs` 27 個 + `appsscript.json`**（計 28） |
+
+> ⚠️ `main` は 2026-06-09 時点の旧版のままです。**`main` を clone しないでください。**
+> 必ず下の `-b codex/deploy-operator-guide` を付けて取得してください。
 
 ---
 
@@ -42,13 +45,14 @@ PC 側の環境を汚さずに実行できます。`npx` を使うので Cloud S
 
 ```bash
 cd ~
-git clone https://github.com/ikazuchizero/lineworks-earthquake-safety-check.git gas-repo
+git clone -b codex/deploy-operator-guide https://github.com/ikazuchizero/lineworks-earthquake-safety-check.git gas-repo
 cd ~/gas-repo
+git branch --show-current    # codex/deploy-operator-guide と出ること
 ```
 
 - `gas-repo` は `git clone` が自動で作るので、事前に `mkdir` は不要です（`~` も `/tmp` も既にあります）
 - 既に clone 済みなら `cd ~/gas-repo && git pull` で最新化
-- 動作確認済みの版に固定したい場合は `git checkout <コミットID>`（例: `253c3d4`）
+- 動作確認済みの版に固定したい場合は `git checkout <コミットID>`（例: `97dcf04`）
 - clone 済みで `fatal: destination path 'gas-repo' already exists` と出たら、そのまま `cd ~/gas-repo` へ
 
 ---
@@ -148,7 +152,7 @@ npx --yes @google/clasp push -f
 | `fatal: destination path ... already exists` | clone 済み。`cd ~/gas-repo && git pull` |
 | `Pushed 0 files` / `Could not find appsscript.json` | `$ROOT` の指定ミス。`ls src` を確認して再実行 |
 | `clasp: command not found` | `npx --yes @google/clasp ...` の形で実行しているか確認（`clasp` 単体は未インストールで正しい） |
-| ファイル数が 28 にならない | `git log -1` が想定のコミットか確認。古い clone なら `git pull` |
+| ファイル数が 28 にならない | `git branch --show-current` が `codex/deploy-operator-guide` か確認（`main` だと旧版）。古い clone なら `git pull` |
 | 認証で `Access blocked` | 本番アカウントが組織の制限を受けている。管理者に Apps Script API の許可を確認 |
 
 ---
