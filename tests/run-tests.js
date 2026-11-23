@@ -116,7 +116,6 @@ const world = {
     sendStatus: 204,
     lockAvailable: true,
     userLockAvailable: true,
-    tokenRequests: 0,
 };
 
 const properties = {
@@ -309,7 +308,6 @@ const UrlFetchApp = {
 
         // トークンURLは設定で変更できるため、URLの形で判別する
         if (url.indexOf("auth.worksmobile.com") !== -1 || url.indexOf("token") !== -1) {
-            world.tokenRequests++;
             return {
                 getResponseCode: () => 200,
                 getContentText: () =>
@@ -416,9 +414,7 @@ const gas = new Function(
 );
 
 // ------------------------------------------------------------- Test helpers
-function resetWorld(options) {
-    const opts = options || {};
-
+function resetWorld() {
     world.properties = {};
     world.sheets = {};
     world.driveFiles = new Map();
@@ -436,19 +432,16 @@ function resetWorld(options) {
     world.sendStatus = 204;
     world.lockAvailable = true;
     world.userLockAvailable = true;
-    world.tokenRequests = 0;
 
-    if (!opts.withoutConfig) {
-        world.properties.CLIENT_ID = "client";
-        world.properties.CLIENT_SECRET = "secret";
-        world.properties.SERVICE_ACCT = "service@example.com";
-        world.properties.PRIVATE_KEY =
-            "-----BEGIN PRIVATE KEY-----\nQUJDRA==\n-----END PRIVATE KEY-----";
-        world.properties.BOT_ID = "bot";
-        world.properties.ROOM_ID = "room";
-        world.properties.NOTIFY_SCALE = "45";
-        world.properties.FORM_TEMPLATE_ID = "template";
-    }
+    world.properties.CLIENT_ID = "client";
+    world.properties.CLIENT_SECRET = "secret";
+    world.properties.SERVICE_ACCT = "service@example.com";
+    world.properties.PRIVATE_KEY =
+        "-----BEGIN PRIVATE KEY-----\nQUJDRA==\n-----END PRIVATE KEY-----";
+    world.properties.BOT_ID = "bot";
+    world.properties.ROOM_ID = "room";
+    world.properties.NOTIFY_SCALE = "45";
+    world.properties.FORM_TEMPLATE_ID = "template";
 
     registerDriveFile("template", "安否確認テンプレート", MimeType.GOOGLE_FORMS);
 }

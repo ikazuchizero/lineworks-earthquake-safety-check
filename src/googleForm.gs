@@ -25,7 +25,11 @@ function resolveFormForNotification(context, state, target) {
                 // フォームが削除・ゴミ箱移動された場合は、状態を捨てて作り直す。
                 // これをしないと同じフォームIDで永久に失敗し続ける。
                 console.error(
-                    "保存済みフォームを開けないため再作成します: " + e.message
+                    "保存済みフォームを開けないため再作成します: " +
+                        e.message +
+                        "（初回: " +
+                        firstError.message +
+                        "）"
                 );
                 failedFormId = record.formId;
                 delete state.forms[earthquakeTime];

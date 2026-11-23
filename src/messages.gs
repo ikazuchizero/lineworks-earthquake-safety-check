@@ -27,14 +27,12 @@ const ERROR_MESSAGES = {
     templateNotSupported: "テンプレートが公開APIに対応していません",
     templateCollectsEmail:
         "テンプレートがメールアドレスを収集しています。匿名回答できるよう設定を変更してください",
-    formPublishFailed: "Googleフォームの公開に失敗しました",
     formUrlMissing: "Googleフォームの回答URLを取得できませんでした",
     formCopyFailed: "Googleフォームの複製に失敗しました",
     formTemplateFileInvalid: "FORM_TEMPLATE_IDがGoogleフォームではありません",
     fixedFormUnavailable: "FIXED_FORM_URLのフォームを開けません",
 
     stateJsonInvalid: "状態シートのJSONが不正です",
-    stateSheetInvalid: "状態シートの形式が不正です",
 };
 
 function propertyMissingMessage(key) {
@@ -70,13 +68,9 @@ const LOG_MESSAGES = {
     success: "送信成功",
     duplicate: "重複パス",
     skipScale: "通知対象外",
-    noEvent: "地震データなし",
-    invalidEvent: "地震データ不正",
     unknownPending: "震源不明のため保留",
     unknownExpired: "震源不明の保留期限切れ",
     quietCaptured: "静穏時間のため保留",
-    quietReleased: "静穏時間終了後に通知",
-    belowScale: "通知対象外",
     stale: "古い地震情報のため通知しない",
     inflightRetry: "前回の送信結果不明のため再送",
     baseline: "初回ベースライン登録",
