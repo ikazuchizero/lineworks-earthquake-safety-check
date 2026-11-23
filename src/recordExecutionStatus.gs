@@ -4,32 +4,28 @@ function recordExecutionSuccess() {
     const properties = PropertiesService.getScriptProperties();
 
     ensureHealthPeriodStarted(properties);
-
-    incrementHealthCount(properties, HEALTH_KEYS.successCount);
-
-    properties.setProperty(HEALTH_KEYS.lastSuccessTime, String(Date.now()));
+    incrementHealthCount(properties, PROPERTY_KEYS.healthSuccessCount);
+    properties.setProperty(PROPERTY_KEYS.healthLastSuccessTime, String(Date.now()));
 }
 
 function recordExecutionFailure(error) {
     const properties = PropertiesService.getScriptProperties();
+    const message = error && error.message ? error.message : String(error);
 
     ensureHealthPeriodStarted(properties);
-
-    incrementHealthCount(properties, HEALTH_KEYS.failureCount);
-
-    properties.setProperty(HEALTH_KEYS.lastErrorTime, String(Date.now()));
-
-    properties.setProperty(HEALTH_KEYS.lastErrorMessage, error.message);
+    incrementHealthCount(properties, PROPERTY_KEYS.healthFailureCount);
+    properties.setProperty(PROPERTY_KEYS.healthLastErrorTime, String(Date.now()));
+    properties.setProperty(PROPERTY_KEYS.healthLastErrorMessage, message);
 }
 
 function ensureHealthPeriodStarted(properties) {
-    const periodStartTime = properties.getProperty(HEALTH_KEYS.periodStartTime);
+    const periodStartTime = properties.getProperty(PROPERTY_KEYS.healthPeriodStartTime);
 
     if (periodStartTime) {
         return;
     }
 
-    properties.setProperty(HEALTH_KEYS.periodStartTime, String(Date.now()));
+    properties.setProperty(PROPERTY_KEYS.healthPeriodStartTime, String(Date.now()));
 }
 
 function incrementHealthCount(properties, key) {

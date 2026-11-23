@@ -1,41 +1,37 @@
 // LINE WORKS API用アクセストークンを取得するファイル
 
-function getAccessToken(properties) {
-    const clientId = properties.getProperty("CLIENT_ID");
-    const clientSecret = properties.getProperty("CLIENT_SECRET");
-    const serviceAcct = properties.getProperty("SERVICE_ACCT");
+let cachedAccessToken = null;
+let cachedAccessTokenExpiresAt = 0;
 
-    let rawKey = properties.getProperty("PRIVATE_KEY");
+function getAccessToken(properties) {
+    const cacheNow = Date.now();
+
+    if (cachedAccessToken && cacheNow < cachedAccessTokenExpiresAt) {
+        return cachedAccessToken;
+    }
+
+    const clientId = properties.getProperty(PROPERTY_KEYS.clientId);
+    const clientSecret = properties.getProperty(PROPERTY_KEYS.clientSecret);
+    const serviceAcct = properties.getProperty(PROPERTY_KEYS.serviceAcct);
+    const rawKey = properties.getProperty(PROPERTY_KEYS.privateKey);
 
     if (!clientId) {
-        throw new Error(ERROR_MESSAGES.clientIdMissing);
+        throw new Error(ERROR_MESSAGES.propertyMissing(PROPERTY_KEYS.clientId));
     }
 
     if (!clientSecret) {
-        throw new Error(ERROR_MESSAGES.clientSecretMissing);
+        throw new Error(ERROR_MESSAGES.propertyMissing(PROPERTY_KEYS.clientSecret));
     }
 
     if (!serviceAcct) {
-        throw new Error(ERROR_MESSAGES.serviceAcctMissing);
+        throw new Error(ERROR_MESSAGES.propertyMissing(PROPERTY_KEYS.serviceAcct));
     }
 
     if (!rawKey) {
-        throw new Error(ERROR_MESSAGES.privateKeyMissing);
+        throw new Error(ERROR_MESSAGES.propertyMissing(PROPERTY_KEYS.privateKey));
     }
 
-    rawKey = rawKey.replace(/^"|"$/g, "").trim();
-
-    const cleanedKey = rawKey
-        .replace(/-----BEGIN PRIVATE KEY-----/, "")
-        .replace(/-----END PRIVATE KEY-----/, "")
-        .replace(/\s+/g, "")
-        .match(/.{1,64}/g)
-        .join("\n");
-
-    const privateKey = `-----BEGIN PRIVATE KEY-----
-${cleanedKey}
------END PRIVATE KEY-----`;
-
+    const privateKey = normalizePrivateKey(rawKey);
     const now = Math.floor(Date.now() / 1000);
 
     const header = {
@@ -48,22 +44,23 @@ ${cleanedKey}
         sub: serviceAcct,
         iat: now,
         exp: now + 3600,
-        aud: LINEWORKS_TOKEN_URL,
+        aud: CONFIG.lineWorksTokenUrl,
     };
 
-    const encodedHeader = Utilities.base64EncodeWebSafe(JSON.stringify(header)).replace(/=+$/, "");
+    const encodedHeader = Utilities.base64EncodeWebSafe(
+        JSON.stringify(header)
+    ).replace(/=+$/, "");
 
-    const encodedPayload = Utilities.base64EncodeWebSafe(JSON.stringify(payload)).replace(/=+$/, "");
+    const encodedPayload = Utilities.base64EncodeWebSafe(
+        JSON.stringify(payload)
+    ).replace(/=+$/, "");
 
     const signatureInput = `${encodedHeader}.${encodedPayload}`;
-
     const signature = Utilities.computeRsaSha256Signature(signatureInput, privateKey);
-
     const encodedSignature = Utilities.base64EncodeWebSafe(signature).replace(/=+$/, "");
-
     const jwt = `${signatureInput}.${encodedSignature}`;
 
-    const response = UrlFetchApp.fetch(LINEWORKS_TOKEN_URL, {
+    const response = UrlFetchApp.fetch(CONFIG.lineWorksTokenUrl, {
         method: "post",
         payload: {
             grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
@@ -77,11 +74,48 @@ ${cleanedKey}
 
     const code = response.getResponseCode();
     const text = response.getContentText();
-    const json = JSON.parse(text);
 
-    if (code !== 200 || !json.access_token) {
-        throw createHttpError(ERROR_MESSAGES.tokenFailed, code, text);
+    let json = null;
+
+    try {
+        json = JSON.parse(text);
+    } catch (e) {
+        json = null;
     }
 
+    if (code !== 200 || !json || !json.access_token) {
+        // レスポンス本文には秘密情報が含まれ得るため、ステータスだけを残す
+        throw createHttpError(ERROR_MESSAGES.tokenFailed, code, "");
+    }
+
+    cachedAccessToken = json.access_token;
+    cachedAccessTokenExpiresAt = cacheNow + 50 * 60 * 1000;
+
     return json.access_token;
+}
+
+function normalizePrivateKey(rawKey) {
+    let key = String(rawKey || "")
+        .replace(/^"|"$/g, "")
+        .replace(/\\n/g, "\n")
+        .trim();
+
+    const body = key
+        .replace(/-----BEGIN PRIVATE KEY-----/g, "")
+        .replace(/-----END PRIVATE KEY-----/g, "")
+        .replace(/\s+/g, "");
+
+    if (body === "") {
+        throw new Error(ERROR_MESSAGES.propertyMissing(PROPERTY_KEYS.privateKey));
+    }
+
+    const lines = body.match(/.{1,64}/g);
+
+    if (!lines) {
+        throw new Error(ERROR_MESSAGES.propertyMissing(PROPERTY_KEYS.privateKey));
+    }
+
+    return `-----BEGIN PRIVATE KEY-----
+${lines.join("\n")}
+-----END PRIVATE KEY-----`;
 }

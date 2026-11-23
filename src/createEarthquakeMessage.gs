@@ -1,11 +1,9 @@
 // LINE WORKSに送る安否確認メッセージを作成するファイル
 
-function createEarthquakeMessage(event, scaleText, formUrl) {
-    const hypocenter = event.earthquake.hypocenter?.name || "不明";
-
-    const eventTime = new Date(event.earthquake.time);
-
-    const formattedTime = Utilities.formatDate(eventTime, "Asia/Tokyo", "yyyy/MM/dd HH:mm:ss");
+function createEarthquakeMessage(target, formUrl) {
+    const formattedTime = formatEarthquakeTime(target.earthquakeTime);
+    const hypocenterName = target.hypocenterName || "不明";
+    const scale = scaleText(target.maxScale);
 
     return `お疲れ様です。
 
@@ -13,8 +11,8 @@ function createEarthquakeMessage(event, scaleText, formUrl) {
 
 【地震情報】
 ・発生時刻：${formattedTime}
-・震源地：${hypocenter}
-・最大震度：${scaleText}
+・震源地：${hypocenterName}
+・最大震度：${scale}
 
 以下のフォームより回答をお願いいたします。
 

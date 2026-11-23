@@ -4,29 +4,71 @@ function checkAndNotifyEarthquake() {
     const lock = LockService.getScriptLock();
 
     if (!lock.tryLock(1000)) {
+        console.log("別の実行中のためスキップしました");
         return;
     }
 
-    const context = getExecutionContext();
+    const properties = PropertiesService.getScriptProperties();
+    let context = null;
+    let state = null;
 
     try {
-        // 地震取得・通知判定
-        const event = getLatestEarthquake();
+        const config = loadConfig(properties);
+        context = getExecutionContext(config, properties);
+        state = loadState(context);
 
-        if (!processEarthquakeValidation(context, event)) {
-            recordExecutionSuccess();
-            return;
+        const events = fetchEarthquakes(config);
+        const targets = selectNotificationTargets(
+            events,
+            state,
+            config,
+            context.nowTime,
+            context
+        );
+
+        // 保留・静穏バッチの更新を送信前に保存する
+        saveState(context, state);
+
+        targets.sort(function (left, right) {
+            return compareTimes(left.earthquakeTime, right.earthquakeTime);
+        });
+
+        for (const target of targets) {
+            notifyEarthquake(context, state, target);
         }
-
-        // LINE WORKS通知
-        notifyEarthquake(context, event);
 
         recordExecutionSuccess();
     } catch (e) {
-        processError(context, e);
+        // 設定不備などでcontextを作れない場合も、分かる範囲で障害通知する
+        processError(context || buildFailureContext(properties), e);
         recordExecutionFailure(e);
         throw e;
     } finally {
+        if (context && state) {
+            try {
+                saveState(context, state);
+            } catch (saveError) {
+                console.error("状態の保存に失敗しました: " + saveError.message);
+            }
+        }
+
         lock.releaseLock();
     }
+}
+
+// 設定読み込み前に失敗した場合の最低限のコンテキスト
+function buildFailureContext(properties) {
+    const maintenanceRoomId =
+        properties.getProperty(PROPERTY_KEYS.maintenanceRoomId) ||
+        properties.getProperty(PROPERTY_KEYS.roomId) ||
+        "";
+
+    return {
+        properties: properties,
+        logSheet: null,
+        config: {
+            maintenanceRoomId: maintenanceRoomId,
+            failureNotifySuppressSeconds: CONFIG.failureNotifySuppressSeconds,
+        },
+    };
 }

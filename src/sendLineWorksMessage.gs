@@ -1,7 +1,7 @@
 // LINE WORKSへメッセージを送信するファイル
 
 function sendLineWorksMessage(accessToken, properties, roomId, text) {
-    const botId = properties.getProperty("BOT_ID");
+    const botId = properties.getProperty(PROPERTY_KEYS.botId);
 
     if (!botId) {
         throw new Error(ERROR_MESSAGES.botIdMissing);
@@ -11,7 +11,12 @@ function sendLineWorksMessage(accessToken, properties, roomId, text) {
         throw new Error(ERROR_MESSAGES.roomIdMissing);
     }
 
-    const url = `https://www.worksapis.com/v1.0/bots/${botId}/channels/${roomId}/messages`;
+    const url =
+        "https://www.worksapis.com/v1.0/bots/" +
+        encodeURIComponent(botId) +
+        "/channels/" +
+        encodeURIComponent(roomId) +
+        "/messages";
 
     const response = UrlFetchApp.fetch(url, {
         method: "post",
@@ -29,12 +34,11 @@ function sendLineWorksMessage(accessToken, properties, roomId, text) {
     });
 
     const code = response.getResponseCode();
-    const body = response.getContentText();
 
-    Logger.log("LINE WORKS HTTP=" + code);
-    Logger.log("LINE WORKS BODY=" + body);
+    console.log("LINE WORKS HTTP=" + code);
 
     if (code < 200 || code >= 300) {
-        throw createHttpError(ERROR_MESSAGES.lineWorksSendFailed, code, body);
+        // レスポンス本文には秘密情報が含まれ得るため、ステータスだけを残す
+        throw createHttpError(ERROR_MESSAGES.lineWorksSendFailed, code, "");
     }
 }

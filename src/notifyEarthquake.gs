@@ -1,17 +1,34 @@
-// LINE WORKSへの通知実行を管理するファイル
+// LINE WORKSへの通知実行と状態更新を管理するファイル
 
-function notifyEarthquake(context, event) {
-    const eventId = event.id;
-    const maxScale = event.earthquake.maxScale || 0;
-    const scaleText = SCALE_NAMES[maxScale] || "不明";
-
-    const message = createEarthquakeMessage(event, scaleText, context.formUrl);
+function notifyEarthquake(context, state, target) {
+    const formUrl = resolveFormForNotification(context, state, target);
+    const message = createEarthquakeMessage(target, formUrl);
 
     const accessToken = getAccessToken(context.properties);
+    sendLineWorksMessage(accessToken, context.properties, context.config.roomId, message);
 
-    sendLineWorksMessage(accessToken, context.properties, context.roomId, message);
+    const notifiedAt = new Date().toISOString();
+    const record = {
+        dedupeKey: target.dedupeKey,
+        eventId: target.eventId || null,
+        earthquakeTime: target.earthquakeTime,
+        hypocenterName: target.hypocenterName,
+        maxScale: target.maxScale,
+        notifiedAt: notifiedAt,
+    };
 
-    context.properties.setProperty("LAST_NOTIFIED_ID", eventId);
+    state.notified[target.dedupeKey] = record;
+    state.notifiedByTime[target.earthquakeTime] = {
+        dedupeKey: target.dedupeKey,
+        notifiedAt: notifiedAt,
+    };
+    delete state.pendingUnknown[target.earthquakeTime];
 
-    logResult(context, eventId, scaleText, LOG_MESSAGES.success);
+    if (target.quietWindowEnd) {
+        state.quietCompletedThrough = target.quietWindowEnd;
+        state.quietBatch = null;
+    }
+
+    saveState(context, state);
+    logResult(context, target, LOG_MESSAGES.success, "回答者URL発行済み");
 }
