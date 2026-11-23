@@ -6,6 +6,7 @@ function runSelfTests() {
     testCandidateBasics();
     testUrlBuild();
     testQuietCandidateSelection();
+    testQuietPendingSuppression();
     testSelection();
 
     console.log("セルフテスト: すべて成功");
@@ -15,12 +16,15 @@ function selfTestConfig(overrides) {
     const config = {
         notifyScale: 45,
         unknownHypocenterHoldSeconds: 600,
+        quietHoursEnabled: true,
         quietHoursStart: 0,
         quietHoursEnd: 6,
+        maxNotificationAgeHours: 24,
         p2pquakeApiUrl: "https://api.p2pquake.net/v2/jma/quake?limit=1",
         p2pquakeLimit: 10,
         stateRetentionDays: 30,
         maxNotifiedRecords: 500,
+        logRetentionDays: 90,
         failureNotifySuppressSeconds: 3600,
         formTitlePrefix: "安否確認",
         expectedRunsPerHour: 60,
@@ -261,6 +265,57 @@ function testQuietCandidateSelection() {
     );
 }
 
+function testQuietPendingSuppression() {
+    const config = selfTestConfig();
+    const context = selfTestContext();
+    const state = createEmptyState();
+
+    // 5:55 UNKNOWN の静穏バッチが保留期限待ち。
+    // 同じ時間帯の 5:50 UNKNOWN は期限切れでも、ここでは通知しない。
+    state.quietBatch = {
+        windowStart: "2026-11-22T15:00:00.000Z",
+        windowEnd: "2026-11-22T21:00:00.000Z",
+        candidate: {
+            eventId: "later-unknown",
+            earthquakeTime: "2026/11/23 05:55:00",
+            hypocenterName: "UNKNOWN",
+            maxScale: 45,
+            dedupeKey: "2026/11/23 05:55:00|UNKNOWN",
+        },
+    };
+    state.pendingUnknown["2026/11/23 05:50:00"] = selfTestPending(
+        "2026/11/23 05:50:00",
+        "2026-11-22T20:51:00.000Z"
+    );
+    state.pendingUnknown["2026/11/23 05:55:00"] = selfTestPending(
+        "2026/11/23 05:55:00",
+        "2026-11-22T20:56:00.000Z"
+    );
+
+    let targets = selectNotificationTargets(
+        [],
+        state,
+        config,
+        selfTestNow("2026/11/23 06:01:00"),
+        context
+    );
+    assert(targets.length === 0, "同じ静穏時間帯の別UNKNOWNは漏らさない");
+
+    // バッチ側の保留期限が切れたら、その1件だけ通知する
+    targets = selectNotificationTargets(
+        [],
+        state,
+        config,
+        selfTestNow("2026/11/23 06:11:00"),
+        context
+    );
+    assert(targets.length === 1, "同じ時間帯は1件だけ通知する");
+    assert(
+        targets[0].earthquakeTime === "2026/11/23 05:55:00",
+        "バッチ候補を通知する"
+    );
+}
+
 function testSelection() {
     const config = selfTestConfig();
     const context = selfTestContext();
@@ -396,8 +451,22 @@ function testSelection() {
     );
     assert(released.length === 1, "静穏時間終了後に通知する");
     assert(
-        released[0].quietWindowEnd === state.quietBatch.windowEnd,
+        released[0].quietWindowEnd === state.quietRelease.windowEnd,
         "quietWindowEndが付く"
+    );
+
+    // 送信前に再実行されても、解放待ちの同じ通知を再選択できる
+    const retried = selectNotificationTargets(
+        [],
+        state,
+        config,
+        selfTestNow("2026/11/23 06:06:00"),
+        context
+    );
+    assert(retried.length === 1, "解放待ちの通知を再試行できる");
+    assert(
+        retried[0].dedupeKey === released[0].dedupeKey,
+        "解放待ちは同じ地震を返す"
     );
 
     // 静穏時間中、同じ時間帯で選ばれなかったUNKNOWNは漏らさない
@@ -482,6 +551,53 @@ function testSelection() {
     );
     assert(targets.length === 1, "同じ発生時刻は1件に絞る");
     assert(targets[0].hypocenterName === "東京湾", "震源地ありを優先する");
+
+    // 長期間停止後の再開時など、古い地震は通知しない
+    state = createEmptyState();
+    targets = selectNotificationTargets(
+        [selfTestEvent("2020/01/01 03:00:00", "東京湾", 45)],
+        state,
+        config,
+        selfTestNow("2026/11/23 12:01:00"),
+        context
+    );
+    assert(targets.length === 0, "古い地震は通知しない");
+
+    // 古い静穏バッチも通知せず破棄する
+    state = createEmptyState();
+    state.quietBatch = {
+        windowStart: "2019-12-31T15:00:00.000Z",
+        windowEnd: "2019-12-31T21:00:00.000Z",
+        candidate: {
+            eventId: "old-quiet",
+            earthquakeTime: "2020/01/01 03:00:00",
+            hypocenterName: "東京湾",
+            maxScale: 45,
+            dedupeKey: "2020/01/01 03:00:00|東京湾",
+        },
+    };
+    targets = selectNotificationTargets(
+        [],
+        state,
+        config,
+        selfTestNow("2026/11/23 12:01:00"),
+        context
+    );
+    assert(targets.length === 0, "古い静穏バッチは通知しない");
+    assert(state.quietBatch === null, "古い静穏バッチは破棄する");
+
+    // 静穏時間を無効にすると、深夜でも即通知する
+    const alwaysNotify = selfTestConfig({ quietHoursEnabled: false });
+    state = createEmptyState();
+    targets = selectNotificationTargets(
+        [selfTestEvent("2026/11/23 03:00:00", "東京湾", 45)],
+        state,
+        alwaysNotify,
+        selfTestNow("2026/11/23 03:01:00"),
+        context
+    );
+    assert(targets.length === 1, "静穏時間を無効にできる");
+    assert(!state.quietBatch, "無効時は静穏バッチを作らない");
 }
 
 function assert(condition, message) {

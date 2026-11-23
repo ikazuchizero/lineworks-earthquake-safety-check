@@ -1,6 +1,7 @@
 // 取得した地震情報から通知対象を選別するファイル
 
 function selectNotificationTargets(events, state, config, now, context) {
+    const nowDate = now instanceof Date ? now : new Date();
     const candidatesByTime = {};
     const quietCandidates = [];
     let quietTarget = null;
@@ -50,6 +51,17 @@ function selectNotificationTargets(events, state, config, now, context) {
             continue;
         }
 
+        // 長期間停止後の再開や初回導入時に、古い地震を通知しない
+        if (isStaleEarthquakeTime(candidate.earthquakeTime, nowDate, config)) {
+            logRoutine(
+                context,
+                candidate,
+                LOG_MESSAGES.stale,
+                "max_age_hours=" + config.maxNotificationAgeHours
+            );
+            continue;
+        }
+
         const quietWindow = quietWindowFor(candidate.earthquakeTime, config);
 
         if (quietWindow) {
@@ -59,12 +71,14 @@ function selectNotificationTargets(events, state, config, now, context) {
                 if (!pending) {
                     state.pendingUnknown[candidate.earthquakeTime] = pendingUnknownRecord(
                         candidate,
-                        now
+                        nowDate
                     );
+                    markStateChanged(state);
                 } else if (isBetterQuietCandidate(candidate, pending)) {
-                    const merged = pendingUnknownRecord(candidate, now);
+                    const merged = pendingUnknownRecord(candidate, nowDate);
                     merged.firstSeenAt = pending.firstSeenAt || merged.firstSeenAt;
                     state.pendingUnknown[candidate.earthquakeTime] = merged;
+                    markStateChanged(state);
                 }
             }
 
@@ -87,58 +101,180 @@ function selectNotificationTargets(events, state, config, now, context) {
     const seenEarthquakeTimes = {};
     const batch = state.quietBatch;
 
-    // 静穏時間帯が終了していれば、保留していた1件を通知候補へ移す
-    // （新しい時間帯を取り込む前に、前の時間帯を解放しておく）
-    if (batch && quietBatchHasEnded(batch, now)) {
-        const completedThrough = state.quietCompletedThrough;
+    // 前回の実行で解放したが、送信結果が確定していない静穏通知を再試行する
+    if (state.quietRelease) {
+        const release = state.quietRelease;
+        const released = release.candidate;
 
-        if (!completedThrough || compareTimes(batch.windowEnd, completedThrough) > 0) {
-            let quietCandidate = candidateFromQuietBatch(batch);
+        if (!released || !released.earthquakeTime) {
+            state.quietRelease = null;
+            markStateChanged(state);
+        } else if (
+            state.notified[released.dedupeKey] ||
+            state.notifiedByTime[released.earthquakeTime]
+        ) {
+            state.quietRelease = null;
+            markStateChanged(state);
+        } else if (isStaleEarthquakeTime(released.earthquakeTime, nowDate, config)) {
+            logRoutine(
+                context,
+                released,
+                LOG_MESSAGES.stale,
+                "quiet_release"
+            );
+            state.quietCompletedThrough = release.windowEnd || state.quietCompletedThrough;
+            state.quietRelease = null;
+            markStateChanged(state);
+        } else if (Number(released.maxScale || 0) < config.notifyScale) {
+            logRoutine(
+                context,
+                released,
+                LOG_MESSAGES.skipScale,
+                "quiet_release_below_scale"
+            );
+            state.quietCompletedThrough = release.windowEnd || state.quietCompletedThrough;
+            state.quietRelease = null;
+            markStateChanged(state);
+        } else {
+            const pending =
+                released.hypocenterName === "UNKNOWN"
+                    ? state.pendingUnknown[released.earthquakeTime]
+                    : null;
+            const holdUnknown =
+                pending && !isPendingUnknownExpired(pending, nowDate, config);
 
-            if (quietCandidate) {
-                quietCandidate = Object.assign({}, quietCandidate);
-            }
+            if (!holdUnknown) {
+                const candidate = Object.assign({}, released, {
+                    quietWindowStart: release.windowStart,
+                    quietWindowEnd: release.windowEnd,
+                });
 
-            if (quietCandidate && quietCandidate.hypocenterName === "UNKNOWN") {
-                const pending = state.pendingUnknown[quietCandidate.earthquakeTime];
-
-                // 保留レコードが消えている場合は待ち続けず、静穏バッチを解放する
-                if (pending && !isPendingUnknownExpired(pending, now, config)) {
-                    quietCandidate = null;
+                quietTarget = candidate;
+                seenDedupeKeys[candidate.dedupeKey] = true;
+                seenEarthquakeTimes[candidate.earthquakeTime] = true;
+                if (
+                    removePendingUnknownsForQuietWindow(
+                        release.windowStart,
+                        state,
+                        config,
+                        candidate.earthquakeTime
+                    )
+                ) {
+                    markStateChanged(state);
                 }
             }
+        }
+    }
 
-            // しきい値が引き上げられた等で対象外になった場合は通知せず破棄する
-            if (
-                quietCandidate &&
-                Number(quietCandidate.maxScale || 0) < config.notifyScale
-            ) {
-                logRoutine(
-                    context,
-                    quietCandidate,
-                    LOG_MESSAGES.skipScale,
-                    "quiet_below_scale"
-                );
-                state.quietCompletedThrough = batch.windowEnd;
+    // 静穏時間帯が終了していれば、保留していた1件を解放待ちへ移す
+    if (!quietTarget && batch && quietBatchHasEnded(batch, nowDate)) {
+        const completedThrough = state.quietCompletedThrough;
+
+        if (completedThrough && compareTimes(batch.windowEnd, completedThrough) <= 0) {
+            state.quietBatch = null;
+            markStateChanged(state);
+        } else {
+            let quietCandidate = candidateFromQuietBatch(batch);
+
+            if (!quietCandidate) {
                 state.quietBatch = null;
-                quietCandidate = null;
-            }
+                markStateChanged(state);
+            } else {
+                quietCandidate = Object.assign({}, quietCandidate);
 
-            if (
-                quietCandidate &&
-                !state.notified[quietCandidate.dedupeKey] &&
-                !state.notifiedByTime[quietCandidate.earthquakeTime]
-            ) {
-                quietCandidate.quietWindowEnd = batch.windowEnd;
-                quietTarget = quietCandidate;
-                seenDedupeKeys[quietCandidate.dedupeKey] = true;
-                seenEarthquakeTimes[quietCandidate.earthquakeTime] = true;
-                removePendingUnknownsForQuietWindow(
-                    batch.windowStart,
-                    state,
-                    config,
-                    quietCandidate.earthquakeTime
-                );
+                // 同じ時間帯の最新候補のほうが良ければ、そちらを採用する
+                for (const entry of quietCandidates) {
+                    if (
+                        String(entry.window.windowStart) === String(batch.windowStart) &&
+                        isBetterQuietCandidate(entry.candidate, quietCandidate)
+                    ) {
+                        quietCandidate = Object.assign({}, entry.candidate);
+                    }
+                }
+
+                if (
+                    quietCandidate &&
+                    isStaleEarthquakeTime(quietCandidate.earthquakeTime, nowDate, config)
+                ) {
+                    logRoutine(
+                        context,
+                        quietCandidate,
+                        LOG_MESSAGES.stale,
+                        "quiet_batch"
+                    );
+                    state.quietCompletedThrough = batch.windowEnd;
+                    state.quietBatch = null;
+                    markStateChanged(state);
+                    quietCandidate = null;
+                }
+
+                // しきい値が引き上げられた等で対象外になった場合は通知せず破棄する
+                if (
+                    quietCandidate &&
+                    Number(quietCandidate.maxScale || 0) < config.notifyScale
+                ) {
+                    logRoutine(
+                        context,
+                        quietCandidate,
+                        LOG_MESSAGES.skipScale,
+                        "quiet_below_scale"
+                    );
+                    state.quietCompletedThrough = batch.windowEnd;
+                    state.quietBatch = null;
+                    markStateChanged(state);
+                    quietCandidate = null;
+                }
+
+                if (quietCandidate) {
+                    quietCandidate.quietWindowStart = batch.windowStart;
+                    quietCandidate.quietWindowEnd = batch.windowEnd;
+
+                    if (
+                        state.notified[quietCandidate.dedupeKey] ||
+                        state.notifiedByTime[quietCandidate.earthquakeTime]
+                    ) {
+                        state.quietCompletedThrough = batch.windowEnd;
+                        state.quietBatch = null;
+                        markStateChanged(state);
+                    } else {
+                        // 送信が失敗しても再試行できるよう、解放待ちとして保存する。
+                        // quietBatch を空けることで、次の時間帯を取り込める。
+                        state.quietRelease = {
+                            windowStart: batch.windowStart,
+                            windowEnd: batch.windowEnd,
+                            candidate: quietCandidate,
+                        };
+                        state.quietBatch = null;
+                        markStateChanged(state);
+
+                        const pending =
+                            quietCandidate.hypocenterName === "UNKNOWN"
+                                ? state.pendingUnknown[quietCandidate.earthquakeTime]
+                                : null;
+                        const holdUnknown =
+                            pending &&
+                            !isPendingUnknownExpired(pending, nowDate, config);
+
+                        // UNKNOWNの続報待ちの間は通知しない。
+                        // 解放待ちとして保持し、次の時間帯の取り込みは妨げない。
+                        if (!holdUnknown) {
+                            quietTarget = quietCandidate;
+                            seenDedupeKeys[quietCandidate.dedupeKey] = true;
+                            seenEarthquakeTimes[quietCandidate.earthquakeTime] = true;
+
+                            if (
+                                removePendingUnknownsForQuietWindow(
+                                    batch.windowStart,
+                                    state,
+                                    config,
+                                    quietCandidate.earthquakeTime
+                                )
+                            ) {
+                                markStateChanged(state);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -162,7 +298,27 @@ function selectNotificationTargets(events, state, config, now, context) {
             }
         }
 
-        if (best && captureQuietCandidate(best, latestWindow, state, config)) {
+        if (
+            best &&
+            !quietTarget &&
+            state.quietRelease &&
+            String(state.quietRelease.windowStart) === String(latestWindow.windowStart)
+        ) {
+            // 解放待ちの時間帯に良い続報が来たら、送信前に候補を更新する
+            if (isBetterQuietCandidate(best, state.quietRelease.candidate)) {
+                state.quietRelease = Object.assign({}, state.quietRelease, {
+                    candidate: best,
+                });
+                markStateChanged(state);
+                logRoutine(
+                    context,
+                    best,
+                    LOG_MESSAGES.quietCaptured,
+                    "window=" + latestWindow.windowStart + " release_replaced"
+                );
+            }
+        } else if (best && captureQuietCandidate(best, latestWindow, state, config)) {
+            markStateChanged(state);
             logRoutine(
                 context,
                 best,
@@ -190,8 +346,9 @@ function selectNotificationTargets(events, state, config, now, context) {
         if (!pending) {
             state.pendingUnknown[earthquakeTime] = pendingUnknownRecord(
                 unknownCandidate,
-                now
+                nowDate
             );
+            markStateChanged(state);
             logRoutine(
                 context,
                 unknownCandidate,
@@ -201,7 +358,7 @@ function selectNotificationTargets(events, state, config, now, context) {
             continue;
         }
 
-        if (isPendingUnknownExpired(pending, now, config)) {
+        if (isPendingUnknownExpired(pending, nowDate, config)) {
             logRoutine(
                 context,
                 unknownCandidate,
@@ -223,17 +380,35 @@ function selectNotificationTargets(events, state, config, now, context) {
 
         if (state.notifiedByTime[earthquakeTime]) {
             delete state.pendingUnknown[earthquakeTime];
+            markStateChanged(state);
             continue;
         }
 
         if (
             seenEarthquakeTimes[earthquakeTime] ||
-            !isPendingUnknownExpired(pending, now, config)
+            !isPendingUnknownExpired(pending, nowDate, config)
         ) {
             continue;
         }
 
-        if (pendingUnknownHasUnfinishedQuietBatch(earthquakeTime, state, now)) {
+        if (isStaleEarthquakeTime(earthquakeTime, nowDate, config)) {
+            logRoutine(
+                context,
+                candidateFromPendingUnknown(earthquakeTime, pending) || {
+                    earthquakeTime: earthquakeTime,
+                    hypocenterName: "UNKNOWN",
+                    maxScale: 0,
+                    dedupeKey: earthquakeTime + "|UNKNOWN",
+                },
+                LOG_MESSAGES.stale,
+                "pending_unknown"
+            );
+            delete state.pendingUnknown[earthquakeTime];
+            markStateChanged(state);
+            continue;
+        }
+
+        if (pendingUnknownHasUnfinishedQuietBatch(earthquakeTime, state, config)) {
             continue;
         }
 
@@ -244,7 +419,7 @@ function selectNotificationTargets(events, state, config, now, context) {
             ? parseTokyoTime(pendingWindow.windowEnd)
             : null;
 
-        if (pendingWindowEnd && pendingWindowEnd.getTime() > now.getTime()) {
+        if (pendingWindowEnd && pendingWindowEnd.getTime() > nowDate.getTime()) {
             continue;
         }
 
@@ -253,6 +428,7 @@ function selectNotificationTargets(events, state, config, now, context) {
         if (!candidate) {
             console.log("保留中のUNKNOWNが不正なため削除: " + earthquakeTime);
             delete state.pendingUnknown[earthquakeTime];
+            markStateChanged(state);
             continue;
         }
 
@@ -264,6 +440,7 @@ function selectNotificationTargets(events, state, config, now, context) {
                 "pending_unknown_below_scale"
             );
             delete state.pendingUnknown[earthquakeTime];
+            markStateChanged(state);
             continue;
         }
 

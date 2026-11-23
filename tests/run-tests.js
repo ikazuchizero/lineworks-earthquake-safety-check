@@ -102,13 +102,16 @@ const world = {
     sheets: {},
     driveFiles: new Map(),
     forms: {},
+    failFormIds: new Set(),
     copiedFormNames: [],
     sentMessages: [],
     sentRooms: [],
     requestedUrls: [],
     triggers: [],
+    sheetWrites: [],
     earthquakeResponse: [],
     earthquakeStatus: 200,
+    sendStatus: 204,
     lockAvailable: true,
     tokenRequests: 0,
 };
@@ -142,6 +145,10 @@ function makeSheet(name, headers) {
         appendRow(row) {
             data.push(row.slice());
         },
+        deleteRows(startRow, numRows) {
+            world.sheetWrites.push({ name, op: "deleteRows", startRow, numRows });
+            data.splice(startRow - 1, numRows);
+        },
         getRange(row, col, numRows, numCols) {
             return {
                 getValues() {
@@ -161,6 +168,7 @@ function makeSheet(name, headers) {
                     return out;
                 },
                 setValues(values) {
+                    world.sheetWrites.push({ name, op: "setValues", row, col });
                     for (let r = 0; r < values.length; r++) {
                         if (!data[row - 1 + r]) {
                             data[row - 1 + r] = [];
@@ -172,6 +180,7 @@ function makeSheet(name, headers) {
                     }
                 },
                 clearContent() {
+                    world.sheetWrites.push({ name, op: "clearContent", row, col });
                     for (let r = 0; r < numRows; r++) {
                         for (let c = 0; c < numCols; c++) {
                             if (data[row - 1 + r]) {
@@ -258,6 +267,10 @@ const MimeType = {
 };
 
 function makeForm(id) {
+    if (world.failFormIds.has(id)) {
+        throw new Error("form not found: " + id);
+    }
+
     const state = world.forms[id] || {};
 
     return {
@@ -279,6 +292,7 @@ function makeForm(id) {
 
 const FormApp = {
     openById: (id) => makeForm(id),
+    openByUrl: (url) => makeForm("url:" + url),
 };
 
 const UrlFetchApp = {
@@ -299,7 +313,13 @@ const UrlFetchApp = {
             const match = url.match(/\/channels\/([^/]+)\/messages/);
             world.sentRooms.push(match ? decodeURIComponent(match[1]) : "");
             world.sentMessages.push(JSON.parse(options.payload).content.text);
-            return { getResponseCode: () => 204, getContentText: () => "" };
+            return {
+                getResponseCode: () => world.sendStatus,
+                getContentText: () =>
+                    world.sendStatus >= 200 && world.sendStatus < 300
+                        ? ""
+                        : "send failed",
+            };
         }
 
         return {
@@ -358,6 +378,12 @@ const gas = new Function(
             "connectivityCheck",
             "setupCheck",
             "fingerprintError",
+            "initializeNotificationBaseline",
+            "cleanupLogs",
+            "cleanupLogsSheet",
+            "isStaleEarthquakeTime",
+            "recordExecutionFailure",
+            "recordExecutionSkipped",
         ].join(", ") +
         "};"
 )(
@@ -385,13 +411,16 @@ function resetWorld(options) {
     world.sheets = {};
     world.driveFiles = new Map();
     world.forms = {};
+    world.failFormIds = new Set();
     world.copiedFormNames = [];
     world.sentMessages = [];
     world.sentRooms = [];
     world.requestedUrls = [];
     world.triggers = [];
+    world.sheetWrites = [];
     world.earthquakeResponse = [];
     world.earthquakeStatus = 200;
+    world.sendStatus = 204;
     world.lockAvailable = true;
     world.tokenRequests = 0;
 
@@ -454,6 +483,11 @@ test("状態シートの往復と保持期間の整理", () => {
     const { config, context } = currentState();
     const state = gas.createEmptyState();
     const now = new Date().toISOString();
+    const recentQuietTime = Utilities.formatDate(
+        new Date(Date.now() - 60 * 60 * 1000),
+        "Asia/Tokyo",
+        "yyyy/MM/dd HH:mm:ss"
+    );
 
     state.notified["2026/11/23 12:00:00|東京湾"] = {
         earthquakeTime: "2026/11/23 12:00:00",
@@ -479,7 +513,12 @@ test("状態シートの往復と保持期間の整理", () => {
     state.quietBatch = {
         windowStart: "2026-11-22T15:00:00.000Z",
         windowEnd: "2026-11-22T21:00:00.000Z",
-        candidate: { earthquakeTime: "2026/11/23 03:00:00" },
+        candidate: { earthquakeTime: recentQuietTime },
+    };
+    state.quietRelease = {
+        windowStart: "2026-11-22T15:00:00.000Z",
+        windowEnd: "2026-11-22T21:00:00.000Z",
+        candidate: { earthquakeTime: recentQuietTime },
     };
     state.quietCompletedThrough = "2026-11-22T21:00:00.000Z";
 
@@ -492,6 +531,7 @@ test("状態シートの往復と保持期間の整理", () => {
     assert.equal(Object.keys(loaded.forms).length, 1);
     assert.equal(Object.keys(loaded.inflight).length, 1);
     assert.equal(loaded.quietBatch.windowEnd, "2026-11-22T21:00:00.000Z");
+    assert.equal(loaded.quietRelease.windowEnd, "2026-11-22T21:00:00.000Z");
     assert.equal(loaded.quietCompletedThrough, "2026-11-22T21:00:00.000Z");
 
     const old = gas.createEmptyState();
@@ -508,6 +548,20 @@ test("状態シートの往復と保持期間の整理", () => {
         createdAt: "2020-01-01T00:00:00.000Z",
     };
     old.inflight["old"] = { startedAt: "2020-01-01T00:00:00.000Z" };
+    old.pendingUnknown["2020/01/01 01:00:00"] = {
+        earthquakeTime: "2020/01/01 01:00:00",
+        firstSeenAt: "2020-01-01T01:00:00.000Z",
+    };
+    old.quietBatch = {
+        windowStart: "2019-12-31T15:00:00.000Z",
+        windowEnd: "2019-12-31T21:00:00.000Z",
+        candidate: { earthquakeTime: "2020/01/01 03:00:00" },
+    };
+    old.quietRelease = {
+        windowStart: "2020-01-01T15:00:00.000Z",
+        windowEnd: "2020-01-01T21:00:00.000Z",
+        candidate: { earthquakeTime: "2020/01/02 03:00:00" },
+    };
 
     gas.saveState(context, old);
     const reloaded = gas.loadState(context);
@@ -516,6 +570,9 @@ test("状態シートの往復と保持期間の整理", () => {
     assert.equal(Object.keys(reloaded.notifiedByTime).length, 0);
     assert.equal(Object.keys(reloaded.forms).length, 0);
     assert.equal(Object.keys(reloaded.inflight).length, 0);
+    assert.equal(Object.keys(reloaded.pendingUnknown).length, 0);
+    assert.equal(reloaded.quietBatch, null);
+    assert.equal(reloaded.quietRelease, null);
 });
 
 test("フォーム履歴の上限は通知済みと同じ件数", () => {
@@ -657,10 +714,11 @@ test("API失敗時は失敗通知・エラーログ・失敗カウントを残�
     assert.ok(String(errorRow[6]).indexOf("地震API取得失敗") !== -1);
 });
 
-test("ヘルスチェック: 正常動作率は100%を超えず、カウンタをリセットする", () => {
+test("ヘルスチェック: 正常動作率は100%を超えず、実行成功率とスキップ数を記録する", () => {
     resetWorld();
     world.properties.HEALTH_SUCCESS_COUNT = "120";
     world.properties.HEALTH_FAILURE_COUNT = "0";
+    world.properties.HEALTH_SKIPPED_COUNT = "3";
     world.properties.HEALTH_PERIOD_START_TIME = String(Date.now() - 3600000);
 
     gas.writeHourlyHealthCheck();
@@ -669,11 +727,14 @@ test("ヘルスチェック: 正常動作率は100%を超えず、カウンタ�
     const last = rows[rows.length - 1];
 
     assert.equal(rows.length, 2);
-    assert.equal(last.length, 11);
+    assert.equal(last.length, 13);
     assert.equal(last[3], 60);
     assert.equal(last[5], 120);
     assert.equal(last[7], 1);
+    assert.equal(last[11], 3);
+    assert.equal(last[12], 1);
     assert.equal(world.properties.HEALTH_SUCCESS_COUNT, "0");
+    assert.equal(world.properties.HEALTH_SKIPPED_COUNT, "0");
 });
 
 test("ヘルスチェック: ロックが取れない場合は記録せずカウンタを保持する", () => {
@@ -785,6 +846,329 @@ test("セットアップ確認: トリガー間隔の記録がないとNG", () =
     world.properties.TRIGGER_HEALTH_INTERVAL_HOURS = "1";
 
     assert.equal(gas.setupCheck(), true);
+});
+
+test("メイン処理: 変化がない実行では状態シートを書き換えない", () => {
+    resetWorld();
+
+    gas.checkAndNotifyEarthquake();
+
+    const stateWrites = world.sheetWrites.filter(
+        (write) =>
+            write.name === "状態" &&
+            (write.op === "setValues" || write.op === "clearContent")
+    );
+
+    assert.equal(world.sentMessages.length, 0);
+    assert.equal(stateWrites.length, 0);
+});
+
+test("初回ベースライン: 過去の地震を送信せず通知済みにする", () => {
+    resetWorld();
+    const eventTime = daytimeEventTime();
+    world.earthquakeResponse = [testEvent(eventTime, "東京湾", 45)];
+
+    const count = gas.initializeNotificationBaseline();
+
+    assert.equal(count, 1);
+    assert.equal(world.sentMessages.length, 0);
+    assert.equal(world.copiedFormNames.length, 0);
+
+    const { state } = currentState();
+    assert.ok(state.notified[eventTime + "|東京湾"]);
+    assert.ok(state.notifiedByTime[eventTime]);
+
+    // ベースライン後の再実行でも送信しない
+    gas.checkAndNotifyEarthquake();
+    assert.equal(world.sentMessages.length, 0);
+});
+
+test("古い静穏バッチと保留UNKNOWNは通知せず破棄する", () => {
+    resetWorld();
+    const config = gas.loadConfig(properties);
+    const context = gas.getExecutionContext(config, properties);
+    const state = gas.createEmptyState();
+
+    state.quietBatch = {
+        windowStart: "2019-12-31T15:00:00.000Z",
+        windowEnd: "2019-12-31T21:00:00.000Z",
+        candidate: {
+            earthquakeTime: "2020/01/01 03:00:00",
+            hypocenterName: "東京湾",
+            maxScale: 45,
+            dedupeKey: "2020/01/01 03:00:00|東京湾",
+        },
+    };
+    state.quietRelease = {
+        windowStart: "2020-01-01T15:00:00.000Z",
+        windowEnd: "2020-01-01T21:00:00.000Z",
+        candidate: {
+            earthquakeTime: "2020/01/02 03:00:00",
+            hypocenterName: "東京湾",
+            maxScale: 45,
+            dedupeKey: "2020/01/02 03:00:00|東京湾",
+        },
+    };
+    state.pendingUnknown["2020/01/01 01:00:00"] = {
+        earthquakeTime: "2020/01/01 01:00:00",
+        hypocenterName: "UNKNOWN",
+        maxScale: 45,
+        firstSeenAt: "2020-01-01T01:00:00.000Z",
+    };
+
+    const targets = gas.selectNotificationTargets(
+        [],
+        state,
+        config,
+        new Date(),
+        context
+    );
+
+    assert.equal(targets.length, 0);
+    assert.equal(state.quietBatch, null);
+    assert.equal(state.quietRelease, null);
+    assert.equal(Object.keys(state.pendingUnknown).length, 0);
+});
+
+test("静穏時間は QUIET_HOURS_ENABLED=false で無効にできる", () => {
+    resetWorld();
+    world.properties.QUIET_HOURS_ENABLED = "false";
+    const eventTime =
+        Utilities.formatDate(new Date(), "Asia/Tokyo", "yyyy/MM/dd") + " 03:00:00";
+    world.earthquakeResponse = [testEvent(eventTime, "東京湾", 45)];
+
+    gas.checkAndNotifyEarthquake();
+
+    assert.equal(world.sentMessages.length, 1);
+    const { state } = currentState();
+    assert.equal(state.quietBatch, null);
+    assert.equal(state.quietRelease, null);
+});
+
+test("静穏バッチ解放後、同じ実行で次の時間帯を取り込める", () => {
+    resetWorld();
+    world.properties.MAX_NOTIFICATION_AGE_HOURS = "168";
+    const config = gas.loadConfig(properties);
+    const context = gas.getExecutionContext(config, properties);
+    const state = gas.createEmptyState();
+    const today = Utilities.formatDate(new Date(), "Asia/Tokyo", "yyyy/MM/dd");
+    const oldDay = Utilities.formatDate(
+        new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+        "Asia/Tokyo",
+        "yyyy/MM/dd"
+    );
+
+    state.quietBatch = {
+        windowStart: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+        windowEnd: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000 + 3600000).toISOString(),
+        candidate: {
+            earthquakeTime: oldDay + " 03:00:00",
+            hypocenterName: "東京湾",
+            maxScale: 45,
+            dedupeKey: oldDay + " 03:00:00|東京湾",
+        },
+    };
+
+    const newEventTime = today + " 05:50:00";
+    const targets = gas.selectNotificationTargets(
+        [testEvent(newEventTime, "茨城県沖", 50)],
+        state,
+        config,
+        new Date(),
+        context
+    );
+
+    assert.equal(targets.length, 1);
+    assert.ok(state.quietRelease);
+    assert.ok(state.quietBatch);
+    assert.equal(state.quietBatch.candidate.earthquakeTime, newEventTime);
+});
+
+test("保存済みフォームが削除されていたら作り直す", () => {
+    resetWorld();
+    const eventTime = daytimeEventTime();
+    world.earthquakeResponse = [testEvent(eventTime, "東京湾", 45)];
+
+    const { context, state } = currentState();
+    state.forms[eventTime] = {
+        formId: "missing",
+        responderUrl: "https://forms.example/missing",
+        createdAt: new Date().toISOString(),
+    };
+    gas.saveState(context, state);
+    world.failFormIds.add("missing");
+
+    gas.checkAndNotifyEarthquake();
+
+    assert.equal(world.sentMessages.length, 1);
+    assert.ok(world.sentMessages[0].indexOf("copy-1") !== -1);
+    assert.equal(world.copiedFormNames.length, 1);
+
+    const { state: after } = currentState();
+    assert.equal(after.forms[eventTime].formId, "copy-1");
+});
+
+test("セットアップ確認: 固定URLのGoogleフォームは回答受付を確認する", () => {
+    resetWorld();
+    delete world.properties.FORM_TEMPLATE_ID;
+    const url = "https://docs.google.com/forms/d/test-form-id/edit";
+    world.properties.FIXED_FORM_URL = url;
+    world.triggers = [
+        { getHandlerFunction: () => "checkAndNotifyEarthquake" },
+        { getHandlerFunction: () => "writeHourlyHealthCheck" },
+    ];
+    world.properties.TRIGGER_CHECK_INTERVAL_MINUTES = "1";
+    world.properties.TRIGGER_HEALTH_INTERVAL_HOURS = "1";
+    world.forms["url:" + url] = { accepting: true, published: true };
+
+    assert.equal(gas.setupCheck(), true);
+
+    world.forms["url:" + url].accepting = false;
+    assert.equal(gas.setupCheck(), false);
+});
+
+test("障害記録: 長すぎるエラーメッセージを切り詰める", () => {
+    resetWorld();
+
+    gas.recordExecutionFailure(new Error("x".repeat(5000)));
+
+    const stored = world.properties.HEALTH_LAST_ERROR_MESSAGE;
+
+    assert.equal(stored.length, 1000);
+    assert.ok(stored.endsWith("…"));
+});
+
+test("設定: https以外のURLは拒否する", () => {
+    resetWorld();
+    world.properties.P2PQUAKE_API_URL = "http://example.test/quake";
+
+    assert.throws(() => gas.loadConfig(properties), /https/);
+});
+
+test("ヘルスチェック: ロック競合でスキップした回数を記録する", () => {
+    resetWorld();
+    world.lockAvailable = false;
+
+    gas.checkAndNotifyEarthquake();
+
+    assert.equal(world.properties.HEALTH_SKIPPED_COUNT, "1");
+    assert.equal(world.sentMessages.length, 0);
+
+    world.lockAvailable = true;
+    gas.writeHourlyHealthCheck();
+
+    const rows = world.sheets["ヘルスチェック"].data;
+    const last = rows[rows.length - 1];
+    assert.equal(last[11], 1);
+});
+
+test("ヘルスチェック: 保持期間を超えた地震ログを削除する", () => {
+    resetWorld();
+    const headers = [
+        "記録時刻",
+        "イベントID",
+        "発生時刻",
+        "震源地",
+        "最大震度",
+        "結果",
+        "詳細",
+    ];
+    const sheet = makeSheet("地震ログ", headers);
+    world.sheets["地震ログ"] = sheet;
+    const oldDate = new Date(Date.now() - 100 * 24 * 60 * 60 * 1000);
+    const newDate = new Date();
+    sheet.data.push([oldDate, "-", "-", "-", "-", "エラー", "old"]);
+    sheet.data.push([newDate, "-", "-", "-", "-", "エラー", "new"]);
+
+    gas.writeHourlyHealthCheck();
+
+    assert.equal(world.sheets["地震ログ"].data.length, 2);
+    assert.equal(world.sheets["地震ログ"].data[0][0], "記録時刻");
+    assert.equal(world.sheets["地震ログ"].data[1][6], "new");
+});
+
+test("静穏通知: 解放待ちの送信成功後、次の時間帯のバッチを残す", () => {
+    resetWorld();
+    const today = Utilities.formatDate(new Date(), "Asia/Tokyo", "yyyy/MM/dd");
+    const tomorrow = Utilities.formatDate(
+        new Date(Date.now() + 24 * 60 * 60 * 1000),
+        "Asia/Tokyo",
+        "yyyy/MM/dd"
+    );
+    const start = Utilities.parseDate(
+        today + " 00:00:00",
+        "Asia/Tokyo",
+        "yyyy/MM/dd HH:mm:ss"
+    );
+    const end = new Date(start.getTime() + 6 * 60 * 60 * 1000);
+    const eventTime = today + " 05:50:00";
+    const nextEventTime = tomorrow + " 03:00:00";
+
+    const { context, state } = currentState();
+    state.quietRelease = {
+        windowStart: start.toISOString(),
+        windowEnd: end.toISOString(),
+        candidate: {
+            earthquakeTime: eventTime,
+            hypocenterName: "東京湾",
+            maxScale: 45,
+            dedupeKey: eventTime + "|東京湾",
+        },
+    };
+    state.quietBatch = {
+        windowStart: new Date(start.getTime() + 24 * 60 * 60 * 1000).toISOString(),
+        windowEnd: new Date(end.getTime() + 24 * 60 * 60 * 1000).toISOString(),
+        candidate: {
+            earthquakeTime: nextEventTime,
+            hypocenterName: "茨城県沖",
+            maxScale: 50,
+            dedupeKey: nextEventTime + "|茨城県沖",
+        },
+    };
+    gas.saveState(context, state);
+
+    gas.checkAndNotifyEarthquake();
+
+    assert.equal(world.sentMessages.length, 1);
+
+    const { state: after } = currentState();
+    assert.equal(after.quietRelease, null);
+    assert.ok(after.quietBatch);
+    assert.equal(after.quietBatch.candidate.earthquakeTime, nextEventTime);
+    assert.equal(after.quietCompletedThrough, end.toISOString());
+});
+
+test("静穏通知: 送信失敗時は解放待ちを残して再試行する", () => {
+    resetWorld();
+    world.sendStatus = 500;
+    const today = Utilities.formatDate(new Date(), "Asia/Tokyo", "yyyy/MM/dd");
+    const start = Utilities.parseDate(
+        today + " 00:00:00",
+        "Asia/Tokyo",
+        "yyyy/MM/dd HH:mm:ss"
+    );
+    const end = new Date(start.getTime() + 6 * 60 * 60 * 1000);
+    const eventTime = today + " 05:50:00";
+
+    const { context, state } = currentState();
+    state.quietRelease = {
+        windowStart: start.toISOString(),
+        windowEnd: end.toISOString(),
+        candidate: {
+            earthquakeTime: eventTime,
+            hypocenterName: "東京湾",
+            maxScale: 45,
+            dedupeKey: eventTime + "|東京湾",
+        },
+    };
+    gas.saveState(context, state);
+
+    assert.throws(() => gas.checkAndNotifyEarthquake());
+
+    const { state: after } = currentState();
+    assert.ok(after.quietRelease);
+    assert.equal(after.quietRelease.candidate.dedupeKey, eventTime + "|東京湾");
+    assert.equal(after.notified[eventTime + "|東京湾"], undefined);
 });
 
 // ---------------------------------------------------------------- Runner

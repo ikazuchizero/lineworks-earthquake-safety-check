@@ -5,21 +5,26 @@ const CONFIG = {
     // 震源不明（UNKNOWN）の続報を待つ秒数
     unknownHypocenterHoldSeconds: 600,
     // 全体通知を保留する時間帯（東京時間、開始を含み終了を含まない）
+    quietHoursEnabled: true,
     quietHoursStart: 0,
     quietHoursEnd: 6,
     // P2PQuakeから取得する件数（1件だけだと通知対象を見落とす）
     p2pquakeLimit: 10,
     // 1時間あたりの想定実行回数（1分トリガーなら60）
     expectedRunsPerHour: 60,
+    // 地震発生からこの時間を超えた情報は通知しない（長期間停止後の誤通知防止）
+    maxNotificationAgeHours: 24,
     // 状態シートに残す日数
     stateRetentionDays: 30,
     // 通知済み履歴の最大件数
     maxNotifiedRecords: 500,
+    // 地震ログを残す日数
+    logRetentionDays: 90,
     // 同じ障害通知を抑止する秒数
     failureNotifySuppressSeconds: 3600,
     // 複製するフォーム名の接頭辞
     formTitlePrefix: "安否確認",
-    // 外部API
+    // 外部API（httpsのみ許可）
     p2pquakeApiUrl: "https://api.p2pquake.net/v2/jma/quake",
     lineWorksTokenUrl: "https://auth.worksmobile.com/oauth2/v2.0/token",
 };
@@ -40,6 +45,7 @@ const LOG_HEADERS = [
     "詳細",
 ];
 
+// 既存の11列は意味を変えず、末尾にスキップ数と実行成功率を追加する
 const HEALTH_HEADERS = [
     "集計時刻",
     "対象開始",
@@ -52,6 +58,8 @@ const HEALTH_HEADERS = [
     "最終成功時刻",
     "最終エラー時刻",
     "最終エラー内容",
+    "スキップ数",
+    "実行成功率",
 ];
 
 const STATE_HEADERS = ["種別", "キー", "値", "更新日時"];
@@ -87,13 +95,18 @@ const PROPERTY_KEYS = {
     p2pquakeApiUrl: "P2PQUAKE_API_URL",
     lineWorksTokenUrl: "LINEWORKS_TOKEN_URL",
     unknownHoldSeconds: "UNKNOWN_HYPOCENTER_HOLD_SECONDS",
+    quietHoursEnabled: "QUIET_HOURS_ENABLED",
     quietHoursStart: "QUIET_HOURS_START",
     quietHoursEnd: "QUIET_HOURS_END",
+    maxNotificationAgeHours: "MAX_NOTIFICATION_AGE_HOURS",
+    logRetentionDays: "LOG_RETENTION_DAYS",
     lastRoutineLogTime: "LAST_ROUTINE_LOG_TIME",
+    lastLogCleanupAt: "LOG_LAST_CLEANUP_AT",
     failureFingerprint: "FAILURE_NOTIFY_FINGERPRINT",
     failureNotifyTime: "FAILURE_NOTIFY_TIME",
     healthSuccessCount: "HEALTH_SUCCESS_COUNT",
     healthFailureCount: "HEALTH_FAILURE_COUNT",
+    healthSkippedCount: "HEALTH_SKIPPED_COUNT",
     healthLastSuccessTime: "HEALTH_LAST_SUCCESS_TIME",
     healthLastErrorTime: "HEALTH_LAST_ERROR_TIME",
     healthLastErrorMessage: "HEALTH_LAST_ERROR_MESSAGE",
@@ -134,7 +147,7 @@ function loadConfig(properties) {
     let formTemplateId = "";
 
     if (fixedFormUrl !== "") {
-        assertHttpUrl(PROPERTY_KEYS.fixedFormUrl, fixedFormUrl);
+        assertHttpsUrl(PROPERTY_KEYS.fixedFormUrl, fixedFormUrl);
     } else {
         formTemplateId = requireProperty(properties, PROPERTY_KEYS.formTemplateId);
     }
@@ -160,6 +173,12 @@ function loadConfig(properties) {
         throw new Error(ERROR_MESSAGES.unknownHoldInvalid);
     }
 
+    const quietHoursEnabled = readBooleanProperty(
+        properties,
+        PROPERTY_KEYS.quietHoursEnabled,
+        CONFIG.quietHoursEnabled
+    );
+
     const quietHoursStart = readIntegerProperty(
         properties,
         PROPERTY_KEYS.quietHoursStart,
@@ -176,8 +195,28 @@ function loadConfig(properties) {
         throw new Error(ERROR_MESSAGES.quietHoursInvalid);
     }
 
-    if (quietHoursStart === quietHoursEnd) {
+    if (quietHoursEnabled && quietHoursStart === quietHoursEnd) {
         throw new Error(ERROR_MESSAGES.quietHoursSame);
+    }
+
+    const maxNotificationAgeHours = readIntegerProperty(
+        properties,
+        PROPERTY_KEYS.maxNotificationAgeHours,
+        CONFIG.maxNotificationAgeHours
+    );
+
+    if (maxNotificationAgeHours <= 0) {
+        throw new Error(ERROR_MESSAGES.maxNotificationAgeInvalid);
+    }
+
+    const logRetentionDays = readIntegerProperty(
+        properties,
+        PROPERTY_KEYS.logRetentionDays,
+        CONFIG.logRetentionDays
+    );
+
+    if (logRetentionDays <= 0) {
+        throw new Error(ERROR_MESSAGES.logRetentionInvalid);
     }
 
     const maintenanceRoomId =
@@ -196,13 +235,16 @@ function loadConfig(properties) {
         fixedFormUrl: fixedFormUrl,
         notifyScale: notifyScale,
         unknownHypocenterHoldSeconds: unknownHypocenterHoldSeconds,
+        quietHoursEnabled: quietHoursEnabled,
         quietHoursStart: quietHoursStart,
         quietHoursEnd: quietHoursEnd,
+        maxNotificationAgeHours: maxNotificationAgeHours,
         p2pquakeApiUrl: p2pquakeApiUrl,
         p2pquakeLimit: CONFIG.p2pquakeLimit,
         lineWorksTokenUrl: lineWorksTokenUrl,
         stateRetentionDays: CONFIG.stateRetentionDays,
         maxNotifiedRecords: CONFIG.maxNotifiedRecords,
+        logRetentionDays: logRetentionDays,
         failureNotifySuppressSeconds: CONFIG.failureNotifySuppressSeconds,
         formTitlePrefix: CONFIG.formTitlePrefix,
         expectedRunsPerHour: CONFIG.expectedRunsPerHour,
@@ -259,17 +301,37 @@ function parseIntegerProperty(key, raw) {
     return Number(text);
 }
 
+function readBooleanProperty(properties, key, defaultValue) {
+    const raw = properties.getProperty(key);
+
+    if (raw === null || String(raw).trim() === "") {
+        return defaultValue;
+    }
+
+    const text = String(raw).trim().toLowerCase();
+
+    if (text === "true" || text === "1" || text === "yes" || text === "on") {
+        return true;
+    }
+
+    if (text === "false" || text === "0" || text === "no" || text === "off") {
+        return false;
+    }
+
+    throw new Error(ERROR_MESSAGES.propertyNotBoolean(key));
+}
+
 function readUrlProperty(properties, key, defaultValue) {
     const value = readOptionalProperty(properties, key);
     const url = value === "" ? defaultValue : value;
 
-    assertHttpUrl(key, url);
+    assertHttpsUrl(key, url);
 
     return url;
 }
 
-function assertHttpUrl(key, value) {
-    if (!/^https?:\/\/[^\s]+$/i.test(value)) {
+function assertHttpsUrl(key, value) {
+    if (!/^https:\/\/[^\s]+$/i.test(value)) {
         throw new Error(ERROR_MESSAGES.invalidUrl(key));
     }
 }

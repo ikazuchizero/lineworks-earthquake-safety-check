@@ -27,6 +27,7 @@ function notifyEarthquake(context, state, target) {
         attempts: attempt,
         startedAt: new Date().toISOString(),
     };
+    markStateChanged(state);
     saveState(context, state);
 
     try {
@@ -35,6 +36,7 @@ function notifyEarthquake(context, state, target) {
     } catch (e) {
         // 送信失敗が確定した場合はマークを外す（次回は試行回数1から）
         delete state.inflight[target.dedupeKey];
+        markStateChanged(state);
 
         try {
             saveState(context, state);
@@ -64,10 +66,55 @@ function notifyEarthquake(context, state, target) {
     delete state.inflight[target.dedupeKey];
 
     if (target.quietWindowEnd) {
-        state.quietCompletedThrough = target.quietWindowEnd;
-        state.quietBatch = null;
+        const currentCompleted = state.quietCompletedThrough;
+
+        if (
+            !currentCompleted ||
+            compareTimes(target.quietWindowEnd, currentCompleted) > 0
+        ) {
+            state.quietCompletedThrough = target.quietWindowEnd;
+        }
+
+        // 解放待ちだった静穏通知が成功した場合だけクリアする。
+        // 次の時間帯のバッチは残す。
+        if (
+            state.quietRelease &&
+            quietWindowMatches(
+                state.quietRelease,
+                target.quietWindowStart,
+                target.quietWindowEnd
+            )
+        ) {
+            state.quietRelease = null;
+        }
+
+        if (
+            state.quietBatch &&
+            quietWindowMatches(
+                state.quietBatch,
+                target.quietWindowStart,
+                target.quietWindowEnd
+            )
+        ) {
+            state.quietBatch = null;
+        }
+
+        markStateChanged(state);
     }
 
+    markStateChanged(state);
     saveState(context, state);
     logResult(context, target, LOG_MESSAGES.success, "回答者URL発行済み attempt=" + attempt);
+}
+
+function quietWindowMatches(batch, windowStart, windowEnd) {
+    if (!batch) {
+        return false;
+    }
+
+    if (windowStart && String(batch.windowStart) === String(windowStart)) {
+        return true;
+    }
+
+    return !!windowEnd && String(batch.windowEnd) === String(windowEnd);
 }

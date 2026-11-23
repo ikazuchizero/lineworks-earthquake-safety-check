@@ -6,10 +6,18 @@ function createEmptyState() {
         notifiedByTime: {},
         pendingUnknown: {},
         quietBatch: null,
+        quietRelease: null,
         quietCompletedThrough: null,
         forms: {},
         inflight: {},
+        dirty: false,
     };
+}
+
+function markStateChanged(state) {
+    if (state) {
+        state.dirty = true;
+    }
 }
 
 function loadState(context) {
@@ -56,6 +64,9 @@ function loadState(context) {
             case "quiet":
                 state.quietBatch = parseStateJsonOrNull(raw, type, key, rowNumber);
                 break;
+            case "quiet_release":
+                state.quietRelease = parseStateJsonOrNull(raw, type, key, rowNumber);
+                break;
             case "quiet_completed":
                 state.quietCompletedThrough =
                     raw === null || raw === undefined || String(raw).trim() === ""
@@ -66,6 +77,8 @@ function loadState(context) {
                 console.log("未知の状態種別を無視しました: " + type + "（" + rowNumber + "行目）");
         }
     }
+
+    state.dirty = false;
 
     return state;
 }
@@ -164,6 +177,13 @@ function saveState(context, state) {
     ]);
 
     rows.push([
+        "quiet_release",
+        "current",
+        state.quietRelease ? JSON.stringify(state.quietRelease) : "",
+        updatedAt,
+    ]);
+
+    rows.push([
         "quiet_completed",
         "current",
         state.quietCompletedThrough || "",
@@ -171,6 +191,7 @@ function saveState(context, state) {
     ]);
 
     writeStateRows(context.stateSheet, rows);
+    state.dirty = false;
 }
 
 function writeStateRows(sheet, rows) {
@@ -193,12 +214,43 @@ function writeStateRows(sheet, rows) {
 }
 
 function pruneState(state, now, config) {
-    const cutoff = now.getTime() - config.stateRetentionDays * 24 * 60 * 60 * 1000;
+    const retentionCutoff =
+        now.getTime() - config.stateRetentionDays * 24 * 60 * 60 * 1000;
+    const notificationCutoff =
+        now.getTime() -
+        Number(config.maxNotificationAgeHours || 24) * 60 * 60 * 1000;
 
-    pruneNotified(state, cutoff, config);
-    prunePendingUnknown(state, cutoff);
-    pruneForms(state, cutoff, config);
-    pruneInflight(state, cutoff);
+    pruneNotified(state, retentionCutoff, config);
+    // 保留・送信中・静穏バッチは通知に使う状態なので、
+    // 30日ではなく通知可能な最大経過時間で整理する
+    prunePendingUnknown(state, notificationCutoff);
+    pruneQuiet(state, notificationCutoff);
+    pruneForms(state, retentionCutoff, config);
+    pruneInflight(state, notificationCutoff);
+}
+
+function pruneQuiet(state, cutoff) {
+    if (state.quietBatch) {
+        const candidate = state.quietBatch.candidate;
+        const time = candidate && candidate.earthquakeTime
+            ? parseTokyoTime(candidate.earthquakeTime)
+            : null;
+
+        if (!time || time.getTime() < cutoff) {
+            state.quietBatch = null;
+        }
+    }
+
+    if (state.quietRelease) {
+        const candidate = state.quietRelease.candidate;
+        const time = candidate && candidate.earthquakeTime
+            ? parseTokyoTime(candidate.earthquakeTime)
+            : null;
+
+        if (!time || time.getTime() < cutoff) {
+            state.quietRelease = null;
+        }
+    }
 }
 
 function pruneNotified(state, cutoff, config) {

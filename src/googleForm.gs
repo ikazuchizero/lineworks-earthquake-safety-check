@@ -10,30 +10,50 @@ function resolveFormForNotification(context, state, target) {
 
     const earthquakeTime = target.earthquakeTime;
     let record = state.forms[earthquakeTime];
+    let failedFormId = null;
+    let form = null;
 
-    if (record && record.responderUrl) {
-        return record.responderUrl;
+    if (record && record.formId) {
+        try {
+            form = FormApp.openById(record.formId);
+        } catch (e) {
+            // フォームが削除・ゴミ箱移動された場合は、状態を捨てて作り直す。
+            // これをしないと同じフォームIDで永久に失敗し続ける。
+            console.error(
+                "保存済みフォームを開けないため再作成します: " + e.message
+            );
+            failedFormId = record.formId;
+            delete state.forms[earthquakeTime];
+            markStateChanged(state);
+            record = null;
+            form = null;
+        }
     }
 
-    if (!record || !record.formId) {
+    if (!form) {
         assertTemplateCanPublish(context.config);
 
-        const formName = buildFormName(target.earthquakeTime, context.config);
-        const formId = copyFormTemplate(formName, context.config);
+        const formName = buildFormName(earthquakeTime, context.config);
+        const formId = copyFormTemplate(formName, context.config, failedFormId);
         record = {
             formId: formId,
             formName: formName,
             createdAt: new Date().toISOString(),
         };
         state.forms[earthquakeTime] = record;
+        markStateChanged(state);
         // 公開前にコピーIDを保存し、再実行で別フォームを作らない
         saveState(context, state);
-    }
 
-    const form = FormApp.openById(record.formId);
+        form = FormApp.openById(record.formId);
+    }
 
     if (!form.supportsAdvancedResponderPermissions()) {
         throw new Error(ERROR_MESSAGES.templateNotSupported);
+    }
+
+    if (form.collectsEmail()) {
+        throw new Error(ERROR_MESSAGES.templateCollectsEmail);
     }
 
     if (!form.isPublished()) {
@@ -50,10 +70,14 @@ function resolveFormForNotification(context, state, target) {
         throw new Error(ERROR_MESSAGES.formUrlMissing);
     }
 
-    record.responderUrl = responderUrl;
-    state.forms[earthquakeTime] = record;
-    // 送信前に回答者URLを保存し、再実行でも同じフォームを使う
-    saveState(context, state);
+    if (record.responderUrl !== responderUrl) {
+        record.responderUrl = responderUrl;
+        record.updatedAt = new Date().toISOString();
+        state.forms[earthquakeTime] = record;
+        markStateChanged(state);
+        // 送信前に回答者URLを保存し、再実行でも同じフォームを使う
+        saveState(context, state);
+    }
 
     return responderUrl;
 }
@@ -96,10 +120,11 @@ function buildFormName(earthquakeTime, config) {
     );
 }
 
-function copyFormTemplate(formName, config) {
+function copyFormTemplate(formName, config, excludeFormId) {
     try {
-        // makeCopy 成功後に状態保存が失敗しても、次回は同じ名前のコピーを使う
-        const existingFormId = findExistingFormId(formName);
+        // makeCopy 成功後に状態保存が失敗しても、次回は同じ名前のコピーを使う。
+        // ただし、直前に開けなかったフォームIDは再利用しない。
+        const existingFormId = findExistingFormId(formName, excludeFormId);
 
         if (existingFormId) {
             console.log("中断前のフォームコピーを再利用します: " + formName);
@@ -114,7 +139,7 @@ function copyFormTemplate(formName, config) {
     }
 }
 
-function findExistingFormId(formName) {
+function findExistingFormId(formName, excludeFormId) {
     const files = DriveApp.getFilesByName(formName);
     let oldest = null;
 
@@ -122,6 +147,10 @@ function findExistingFormId(formName) {
         const file = files.next();
 
         if (file.getMimeType() !== MimeType.GOOGLE_FORMS) {
+            continue;
+        }
+
+        if (excludeFormId && String(file.getId()) === String(excludeFormId)) {
             continue;
         }
 

@@ -4,6 +4,12 @@ function checkAndNotifyEarthquake() {
     const lock = LockService.getScriptLock();
 
     if (!lock.tryLock(1000)) {
+        try {
+            recordExecutionSkipped();
+        } catch (e) {
+            console.error("スキップ回数の記録に失敗しました: " + e.message);
+        }
+
         console.log("別の実行中のためスキップしました");
         return;
     }
@@ -26,8 +32,10 @@ function checkAndNotifyEarthquake() {
             context
         );
 
-        // 保留・静穏バッチの更新を送信前に保存する
-        saveState(context, state);
+        // 保留・静穏バッチの更新があった場合だけ送信前に保存する
+        if (state.dirty) {
+            saveState(context, state);
+        }
 
         targets.sort(function (left, right) {
             return compareTimes(left.earthquakeTime, right.earthquakeTime);
@@ -44,7 +52,7 @@ function checkAndNotifyEarthquake() {
         recordExecutionFailure(e);
         throw e;
     } finally {
-        if (context && state) {
+        if (context && state && state.dirty) {
             try {
                 saveState(context, state);
             } catch (saveError) {

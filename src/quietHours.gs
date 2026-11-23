@@ -6,6 +6,10 @@ function getTokyoHour(date) {
 
 // 発生時刻が静穏時間に入る場合、その静穏時間帯の開始・終了を返す
 function quietWindowFor(value, config) {
+    if (config && config.quietHoursEnabled === false) {
+        return null;
+    }
+
     const date = value instanceof Date ? value : parseTokyoTime(value);
 
     if (!date) {
@@ -56,16 +60,6 @@ function quietBatchHasEnded(batch, now) {
     return !!end && end.getTime() <= now.getTime();
 }
 
-function isQuietNow(config) {
-    const hour = getTokyoHour(new Date());
-    const start = config.quietHoursStart;
-    const end = config.quietHoursEnd;
-
-    return start < end
-        ? hour >= start && hour < end
-        : hour >= start || hour < end;
-}
-
 // 同じ静穏時間帯では、震度が大きいもの、同震度なら後発を採用する
 function isBetterQuietCandidate(candidate, existing) {
     if (!existing) {
@@ -110,14 +104,26 @@ function captureQuietCandidate(candidate, window, state, config) {
         return false;
     }
 
-    const batch = state.quietBatch;
-
-    if (batch && String(batch.windowStart) !== String(window.windowStart)) {
+    // 同じ時間帯をすでに解放待ちにしている場合は、二重に取り込まない
+    if (
+        state.quietRelease &&
+        String(state.quietRelease.windowStart) === String(window.windowStart)
+    ) {
         return false;
     }
 
-    if (batch && !isBetterQuietCandidate(candidate, batch.candidate)) {
-        return false;
+    const batch = state.quietBatch;
+
+    if (batch) {
+        if (String(batch.windowStart) !== String(window.windowStart)) {
+            // 別時間帯のバッチが残っている間は取り込まない。
+            // 解放時は quietRelease へ移してから batch を空ける。
+            return false;
+        }
+
+        if (!isBetterQuietCandidate(candidate, batch.candidate)) {
+            return false;
+        }
     }
 
     state.quietBatch = {
@@ -129,18 +135,31 @@ function captureQuietCandidate(candidate, window, state, config) {
     return true;
 }
 
-function pendingUnknownHasUnfinishedQuietBatch(earthquakeTime, state, now) {
+// 未完了の静穏バッチ、または解放待ちのバッチと同じ時間帯の保留UNKNOWNは、
+// その時間帯の1件通知に吸収する。別時間帯の保留は止めない。
+function pendingUnknownHasUnfinishedQuietBatch(earthquakeTime, state, config) {
+    const pendingWindow = quietWindowFor(earthquakeTime, config);
+
+    if (!pendingWindow) {
+        return false;
+    }
+
+    if (
+        state.quietRelease &&
+        String(state.quietRelease.windowStart) === String(pendingWindow.windowStart)
+    ) {
+        return true;
+    }
+
     const batch = state.quietBatch;
 
     if (!batch || !batch.candidate) {
         return false;
     }
 
-    if (String(batch.candidate.earthquakeTime) !== String(earthquakeTime)) {
-        return false;
-    }
-
-    return !quietBatchHasEnded(batch, now);
+    // 時間帯が終了していても、UNKNOWNの保留期限待ちなどで
+    // まだ解放されていないバッチは「未完了」として扱う
+    return String(batch.windowStart) === String(pendingWindow.windowStart);
 }
 
 function removePendingUnknownsForQuietWindow(

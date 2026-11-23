@@ -1,5 +1,7 @@
 // スプレッドシートへログを書き込むファイル
 
+const MAX_LOG_DETAIL_LENGTH = 5000;
+
 function writeLog(context, entry) {
     if (!context || !context.logSheet) {
         return;
@@ -14,7 +16,7 @@ function writeLog(context, entry) {
         entry.scaleText ||
             (entry.maxScale !== undefined ? scaleText(entry.maxScale) : "-"),
         entry.result || "-",
-        entry.detail || "",
+        truncateText(entry.detail || "", MAX_LOG_DETAIL_LENGTH),
     ];
 
     try {

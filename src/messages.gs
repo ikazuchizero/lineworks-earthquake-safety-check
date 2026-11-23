@@ -11,6 +11,8 @@ const ERROR_MESSAGES = {
     unknownHoldInvalid: "UNKNOWN_HYPOCENTER_HOLD_SECONDSは1以上で設定してください",
     quietHoursInvalid: "QUIET_HOURS_START/ENDは0〜23で設定してください",
     quietHoursSame: "QUIET_HOURS_STARTとQUIET_HOURS_ENDは別の値にしてください",
+    maxNotificationAgeInvalid: "MAX_NOTIFICATION_AGE_HOURSは1以上で設定してください",
+    logRetentionInvalid: "LOG_RETENTION_DAYSは1以上で設定してください",
 
     botIdMissing: "BOT_ID未設定",
     roomIdMissing: "ROOM_ID未設定",
@@ -24,6 +26,8 @@ const ERROR_MESSAGES = {
     formPublishFailed: "Googleフォームの公開に失敗しました",
     formUrlMissing: "Googleフォームの回答URLを取得できませんでした",
     formCopyFailed: "Googleフォームの複製に失敗しました",
+    formTemplateFileInvalid: "FORM_TEMPLATE_IDがGoogleフォームではありません",
+    fixedFormUnavailable: "FIXED_FORM_URLのフォームを開けません",
 
     stateJsonInvalid: "状態シートのJSONが不正です",
     stateSheetInvalid: "状態シートの形式が不正です",
@@ -37,6 +41,10 @@ function propertyNotIntegerMessage(key) {
     return key + "は整数で設定してください";
 }
 
+function propertyNotBooleanMessage(key) {
+    return key + "は true / false で設定してください";
+}
+
 function placeholderNotReplacedMessage(key) {
     return (
         key +
@@ -45,11 +53,12 @@ function placeholderNotReplacedMessage(key) {
 }
 
 function invalidUrlMessage(key) {
-    return key + "は http:// または https:// で始まるURLを設定してください";
+    return key + "は https:// で始まるURLを設定してください";
 }
 
 ERROR_MESSAGES.propertyMissing = propertyMissingMessage;
 ERROR_MESSAGES.propertyNotInteger = propertyNotIntegerMessage;
+ERROR_MESSAGES.propertyNotBoolean = propertyNotBooleanMessage;
 ERROR_MESSAGES.placeholderNotReplaced = placeholderNotReplacedMessage;
 ERROR_MESSAGES.invalidUrl = invalidUrlMessage;
 
@@ -64,7 +73,9 @@ const LOG_MESSAGES = {
     quietCaptured: "静穏時間のため保留",
     quietReleased: "静穏時間終了後に通知",
     belowScale: "通知対象外",
+    stale: "古い地震情報のため通知しない",
     inflightRetry: "前回の送信結果不明のため再送",
+    baseline: "初回ベースライン登録",
 };
 
 function createHttpError(message, code, body) {

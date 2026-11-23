@@ -103,12 +103,17 @@ function getAccessToken(properties, config) {
 
 function resolveLineWorksTokenUrl(properties, config) {
     if (config && config.lineWorksTokenUrl) {
+        assertHttpsUrl(PROPERTY_KEYS.lineWorksTokenUrl, config.lineWorksTokenUrl);
+
         return config.lineWorksTokenUrl;
     }
 
     const configured = readOptionalProperty(properties, PROPERTY_KEYS.lineWorksTokenUrl);
+    const url = configured === "" ? CONFIG.lineWorksTokenUrl : configured;
 
-    return configured === "" ? CONFIG.lineWorksTokenUrl : configured;
+    assertHttpsUrl(PROPERTY_KEYS.lineWorksTokenUrl, url);
+
+    return url;
 }
 
 function normalizePrivateKey(rawKey) {

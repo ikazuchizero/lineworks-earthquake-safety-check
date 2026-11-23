@@ -54,6 +54,10 @@ function parseTokyoTime(value) {
         return null;
     }
 
+    if (value instanceof Date) {
+        return isNaN(value.getTime()) ? null : value;
+    }
+
     const text = String(value).trim();
 
     if (text === "") {
@@ -128,6 +132,21 @@ function candidateFromPendingUnknown(earthquakeTime, pending) {
         maxScale: Number(pending.maxScale || 0),
         dedupeKey: dedupeKey,
     };
+}
+
+// 長期間トリガーが止まった後などに、古い地震を「先ほど発生」として
+// 通知しないための判定。解釈できない時刻も通知対象外とする。
+function isStaleEarthquakeTime(value, now, config) {
+    const date = value instanceof Date ? value : parseTokyoTime(value);
+
+    if (!date) {
+        return true;
+    }
+
+    const cutoff =
+        now.getTime() - Number(config.maxNotificationAgeHours || 24) * 60 * 60 * 1000;
+
+    return date.getTime() < cutoff;
 }
 
 function compareTimes(left, right) {
