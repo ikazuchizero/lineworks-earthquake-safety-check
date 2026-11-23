@@ -37,8 +37,21 @@ function propertyNotIntegerMessage(key) {
     return key + "は整数で設定してください";
 }
 
+function placeholderNotReplacedMessage(key) {
+    return (
+        key +
+        "がプレースホルダーのままです（REPLACE_WITH_ を実際の値に置き換えてください）"
+    );
+}
+
+function invalidUrlMessage(key) {
+    return key + "は http:// または https:// で始まるURLを設定してください";
+}
+
 ERROR_MESSAGES.propertyMissing = propertyMissingMessage;
 ERROR_MESSAGES.propertyNotInteger = propertyNotIntegerMessage;
+ERROR_MESSAGES.placeholderNotReplaced = placeholderNotReplacedMessage;
+ERROR_MESSAGES.invalidUrl = invalidUrlMessage;
 
 const LOG_MESSAGES = {
     success: "送信成功",

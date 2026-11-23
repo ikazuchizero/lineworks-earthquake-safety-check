@@ -2,15 +2,21 @@
 
 let cachedAccessToken = null;
 let cachedAccessTokenExpiresAt = 0;
+let cachedAccessTokenKey = null;
 
-function getAccessToken(properties) {
+function getAccessToken(properties, config) {
     const cacheNow = Date.now();
+    const tokenUrl = resolveLineWorksTokenUrl(properties, config);
+    const clientId = properties.getProperty(PROPERTY_KEYS.clientId);
+    const cacheKey = tokenUrl + "|" + clientId;
 
-    if (cachedAccessToken && cacheNow < cachedAccessTokenExpiresAt) {
+    if (
+        cachedAccessToken &&
+        cachedAccessTokenKey === cacheKey &&
+        cacheNow < cachedAccessTokenExpiresAt
+    ) {
         return cachedAccessToken;
     }
-
-    const clientId = properties.getProperty(PROPERTY_KEYS.clientId);
     const clientSecret = properties.getProperty(PROPERTY_KEYS.clientSecret);
     const serviceAcct = properties.getProperty(PROPERTY_KEYS.serviceAcct);
     const rawKey = properties.getProperty(PROPERTY_KEYS.privateKey);
@@ -44,7 +50,7 @@ function getAccessToken(properties) {
         sub: serviceAcct,
         iat: now,
         exp: now + 3600,
-        aud: CONFIG.lineWorksTokenUrl,
+        aud: tokenUrl,
     };
 
     const encodedHeader = Utilities.base64EncodeWebSafe(
@@ -60,7 +66,7 @@ function getAccessToken(properties) {
     const encodedSignature = Utilities.base64EncodeWebSafe(signature).replace(/=+$/, "");
     const jwt = `${signatureInput}.${encodedSignature}`;
 
-    const response = UrlFetchApp.fetch(CONFIG.lineWorksTokenUrl, {
+    const response = UrlFetchApp.fetch(tokenUrl, {
         method: "post",
         payload: {
             grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
@@ -90,8 +96,19 @@ function getAccessToken(properties) {
 
     cachedAccessToken = json.access_token;
     cachedAccessTokenExpiresAt = cacheNow + 50 * 60 * 1000;
+    cachedAccessTokenKey = cacheKey;
 
     return json.access_token;
+}
+
+function resolveLineWorksTokenUrl(properties, config) {
+    if (config && config.lineWorksTokenUrl) {
+        return config.lineWorksTokenUrl;
+    }
+
+    const configured = readOptionalProperty(properties, PROPERTY_KEYS.lineWorksTokenUrl);
+
+    return configured === "" ? CONFIG.lineWorksTokenUrl : configured;
 }
 
 function normalizePrivateKey(rawKey) {

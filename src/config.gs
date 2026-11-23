@@ -1,8 +1,7 @@
 // 設定値とスクリプトプロパティのキーを管理するファイル
 
 const CONFIG = {
-    // 通知する震度の下限（P2PQuakeのmaxScaleコード）
-    notifyScale: 45,
+    // 通知する震度の下限（P2PQuakeのmaxScaleコード）は NOTIFY_SCALE で必須設定する
     // 震源不明（UNKNOWN）の続報を待つ秒数
     unknownHypocenterHoldSeconds: 600,
     // 全体通知を保留する時間帯（東京時間、開始を含み終了を含まない）
@@ -82,8 +81,11 @@ const PROPERTY_KEYS = {
     roomId: "ROOM_ID",
     maintenanceRoomId: "MAINTENANCE_ROOM_ID",
     formTemplateId: "FORM_TEMPLATE_ID",
+    fixedFormUrl: "FIXED_FORM_URL",
     spreadsheetId: "SPREADSHEET_ID",
     notifyScale: "NOTIFY_SCALE",
+    p2pquakeApiUrl: "P2PQUAKE_API_URL",
+    lineWorksTokenUrl: "LINEWORKS_TOKEN_URL",
     unknownHoldSeconds: "UNKNOWN_HYPOCENTER_HOLD_SECONDS",
     quietHoursStart: "QUIET_HOURS_START",
     quietHoursEnd: "QUIET_HOURS_END",
@@ -109,7 +111,6 @@ function loadConfig(properties) {
         PROPERTY_KEYS.privateKey,
         PROPERTY_KEYS.botId,
         PROPERTY_KEYS.roomId,
-        PROPERTY_KEYS.formTemplateId,
     ];
 
     const values = {};
@@ -117,15 +118,37 @@ function loadConfig(properties) {
         values[key] = requireProperty(properties, key);
     }
 
-    const notifyScale = readIntegerProperty(
+    // PHP版と同じく、通知震度は既定値で補わず必須にする
+    const notifyScale = readRequiredIntegerProperty(
         properties,
-        PROPERTY_KEYS.notifyScale,
-        CONFIG.notifyScale
+        PROPERTY_KEYS.notifyScale
     );
 
     if (ALLOWED_NOTIFY_SCALES.indexOf(notifyScale) === -1) {
         throw new Error(ERROR_MESSAGES.notifyScaleInvalid);
     }
+
+    // 固定フォームURLモード（PHP版 form_stock_enabled=false 相当）。
+    // 指定時はテンプレート複製を行わず、FORM_TEMPLATE_ID は不要。
+    const fixedFormUrl = readOptionalProperty(properties, PROPERTY_KEYS.fixedFormUrl);
+    let formTemplateId = "";
+
+    if (fixedFormUrl !== "") {
+        assertHttpUrl(PROPERTY_KEYS.fixedFormUrl, fixedFormUrl);
+    } else {
+        formTemplateId = requireProperty(properties, PROPERTY_KEYS.formTemplateId);
+    }
+
+    const p2pquakeApiUrl = readUrlProperty(
+        properties,
+        PROPERTY_KEYS.p2pquakeApiUrl,
+        CONFIG.p2pquakeApiUrl
+    );
+    const lineWorksTokenUrl = readUrlProperty(
+        properties,
+        PROPERTY_KEYS.lineWorksTokenUrl,
+        CONFIG.lineWorksTokenUrl
+    );
 
     const unknownHypocenterHoldSeconds = readIntegerProperty(
         properties,
@@ -169,14 +192,15 @@ function loadConfig(properties) {
         botId: values[PROPERTY_KEYS.botId],
         roomId: values[PROPERTY_KEYS.roomId],
         maintenanceRoomId: maintenanceRoomId,
-        formTemplateId: values[PROPERTY_KEYS.formTemplateId],
+        formTemplateId: formTemplateId,
+        fixedFormUrl: fixedFormUrl,
         notifyScale: notifyScale,
         unknownHypocenterHoldSeconds: unknownHypocenterHoldSeconds,
         quietHoursStart: quietHoursStart,
         quietHoursEnd: quietHoursEnd,
-        p2pquakeApiUrl: CONFIG.p2pquakeApiUrl,
+        p2pquakeApiUrl: p2pquakeApiUrl,
         p2pquakeLimit: CONFIG.p2pquakeLimit,
-        lineWorksTokenUrl: CONFIG.lineWorksTokenUrl,
+        lineWorksTokenUrl: lineWorksTokenUrl,
         stateRetentionDays: CONFIG.stateRetentionDays,
         maxNotifiedRecords: CONFIG.maxNotifiedRecords,
         failureNotifySuppressSeconds: CONFIG.failureNotifySuppressSeconds,
@@ -192,13 +216,23 @@ function requireProperty(properties, key) {
         throw new Error(ERROR_MESSAGES.propertyMissing(key));
     }
 
-    return String(value).trim();
+    const text = String(value).trim();
+    assertNotPlaceholder(key, text);
+
+    return text;
 }
 
 function readOptionalProperty(properties, key) {
     const value = properties.getProperty(key);
 
-    return value === null ? "" : String(value).trim();
+    if (value === null || String(value).trim() === "") {
+        return "";
+    }
+
+    const text = String(value).trim();
+    assertNotPlaceholder(key, text);
+
+    return text;
 }
 
 function readIntegerProperty(properties, key, defaultValue) {
@@ -208,6 +242,14 @@ function readIntegerProperty(properties, key, defaultValue) {
         return defaultValue;
     }
 
+    return parseIntegerProperty(key, raw);
+}
+
+function readRequiredIntegerProperty(properties, key) {
+    return parseIntegerProperty(key, requireProperty(properties, key));
+}
+
+function parseIntegerProperty(key, raw) {
     const text = String(raw).trim();
 
     if (!/^-?\d+$/.test(text)) {
@@ -215,4 +257,26 @@ function readIntegerProperty(properties, key, defaultValue) {
     }
 
     return Number(text);
+}
+
+function readUrlProperty(properties, key, defaultValue) {
+    const value = readOptionalProperty(properties, key);
+    const url = value === "" ? defaultValue : value;
+
+    assertHttpUrl(key, url);
+
+    return url;
+}
+
+function assertHttpUrl(key, value) {
+    if (!/^https?:\/\/[^\s]+$/i.test(value)) {
+        throw new Error(ERROR_MESSAGES.invalidUrl(key));
+    }
+}
+
+// PHP版と同じく、config.example のプレースホルダーが残ったまま起動しない
+function assertNotPlaceholder(key, value) {
+    if (String(value).indexOf("REPLACE_WITH_") === 0) {
+        throw new Error(ERROR_MESSAGES.placeholderNotReplaced(key));
+    }
 }

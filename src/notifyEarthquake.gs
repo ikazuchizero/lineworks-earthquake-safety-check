@@ -30,7 +30,7 @@ function notifyEarthquake(context, state, target) {
     saveState(context, state);
 
     try {
-        const accessToken = getAccessToken(context.properties);
+        const accessToken = getAccessToken(context.properties, context.config);
         sendLineWorksMessage(accessToken, context.properties, context.config.roomId, message);
     } catch (e) {
         // 送信失敗が確定した場合はマークを外す（次回は試行回数1から）

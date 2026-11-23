@@ -16,7 +16,7 @@ function notifyFailure(context, error) {
     }
 
     const properties = context.properties;
-    const fingerprint = fingerprintError("check_failed", message);
+    const fingerprint = fingerprintError("check_failed", error);
     const lastFingerprint = properties.getProperty(PROPERTY_KEYS.failureFingerprint);
     const lastTime = Number(
         properties.getProperty(PROPERTY_KEYS.failureNotifyTime) || 0
@@ -30,7 +30,7 @@ function notifyFailure(context, error) {
         return;
     }
 
-    const accessToken = getAccessToken(properties);
+    const accessToken = getAccessToken(properties, context.config);
 
     sendLineWorksMessage(
         accessToken,
@@ -43,10 +43,14 @@ function notifyFailure(context, error) {
     properties.setProperty(PROPERTY_KEYS.failureNotifyTime, String(now));
 }
 
-function fingerprintError(category, message) {
+// PHP版の fingerprint と同じく、分類・例外クラス相当（name）・メッセージから作る。
+// GAS の例外には PHP のクラス階層がないため、Error.name をクラス相当として使う。
+function fingerprintError(category, error) {
+    const message = error && error.message ? error.message : String(error);
+    const name = error && error.name ? String(error.name) : "Error";
     const digest = Utilities.computeDigest(
         Utilities.DigestAlgorithm.SHA_256,
-        category + "|" + message
+        category + "|" + name + "|" + message
     );
 
     return digest

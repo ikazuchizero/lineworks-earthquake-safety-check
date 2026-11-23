@@ -3,6 +3,11 @@
 let checkedTemplateId = null;
 
 function resolveFormForNotification(context, state, target) {
+    // 固定フォームURLモードでは複製・公開を行わず、常に同じURLを使う
+    if (context.config.fixedFormUrl) {
+        return context.config.fixedFormUrl;
+    }
+
     const earthquakeTime = target.earthquakeTime;
     let record = state.forms[earthquakeTime];
 

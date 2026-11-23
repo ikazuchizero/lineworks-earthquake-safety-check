@@ -86,8 +86,13 @@ const Utilities = {
     computeRsaSha256Signature() {
         return [1, 2, 3, 4];
     },
-    computeDigest() {
-        return [10, 20, 30];
+    computeDigest(algorithm, value) {
+        return Array.from(
+            require("crypto")
+                .createHash("sha256")
+                .update(String(value), "utf8")
+                .digest()
+        ).map((byte) => (byte > 127 ? byte - 256 : byte));
     },
 };
 
@@ -99,6 +104,9 @@ const world = {
     forms: {},
     copiedFormNames: [],
     sentMessages: [],
+    sentRooms: [],
+    requestedUrls: [],
+    triggers: [],
     earthquakeResponse: [],
     earthquakeStatus: 200,
     lockAvailable: true,
@@ -275,7 +283,10 @@ const FormApp = {
 
 const UrlFetchApp = {
     fetch(url, options) {
-        if (url.indexOf("auth.worksmobile.com") !== -1) {
+        world.requestedUrls.push(url);
+
+        // トークンURLは設定で変更できるため、URLの形で判別する
+        if (url.indexOf("auth.worksmobile.com") !== -1 || url.indexOf("token") !== -1) {
             world.tokenRequests++;
             return {
                 getResponseCode: () => 200,
@@ -284,22 +295,20 @@ const UrlFetchApp = {
             };
         }
 
-        if (url.indexOf("worksapis.com") !== -1) {
+        if (url.indexOf("/channels/") !== -1) {
+            const match = url.match(/\/channels\/([^/]+)\/messages/);
+            world.sentRooms.push(match ? decodeURIComponent(match[1]) : "");
             world.sentMessages.push(JSON.parse(options.payload).content.text);
             return { getResponseCode: () => 204, getContentText: () => "" };
         }
 
-        if (url.indexOf("p2pquake.net") !== -1) {
-            return {
-                getResponseCode: () => world.earthquakeStatus,
-                getContentText: () =>
-                    world.earthquakeStatus === 200
-                        ? JSON.stringify(world.earthquakeResponse)
-                        : "upstream error",
-            };
-        }
-
-        throw new Error("unexpected url: " + url);
+        return {
+            getResponseCode: () => world.earthquakeStatus,
+            getContentText: () =>
+                world.earthquakeStatus === 200
+                    ? JSON.stringify(world.earthquakeResponse)
+                    : "upstream error",
+        };
     },
 };
 
@@ -311,7 +320,7 @@ const LockService = {
 };
 
 const ScriptApp = {
-    getProjectTriggers: () => [],
+    getProjectTriggers: () => world.triggers,
     newTrigger: () => ({
         timeBased: () => ({
             everyMinutes: () => ({ create: () => {} }),
@@ -344,7 +353,11 @@ const gas = new Function(
             "checkAndNotifyEarthquake",
             "writeHourlyHealthCheck",
             "buildFormName",
+            "buildP2pquakeUrl",
             "selectNotificationTargets",
+            "connectivityCheck",
+            "setupCheck",
+            "fingerprintError",
         ].join(", ") +
         "};"
 )(
@@ -374,6 +387,9 @@ function resetWorld(options) {
     world.forms = {};
     world.copiedFormNames = [];
     world.sentMessages = [];
+    world.sentRooms = [];
+    world.requestedUrls = [];
+    world.triggers = [];
     world.earthquakeResponse = [];
     world.earthquakeStatus = 200;
     world.lockAvailable = true;
@@ -387,6 +403,7 @@ function resetWorld(options) {
             "-----BEGIN PRIVATE KEY-----\nQUJDRA==\n-----END PRIVATE KEY-----";
         world.properties.BOT_ID = "bot";
         world.properties.ROOM_ID = "room";
+        world.properties.NOTIFY_SCALE = "45";
         world.properties.FORM_TEMPLATE_ID = "template";
     }
 
@@ -668,6 +685,106 @@ test("ヘルスチェック: ロックが取れない場合は記録せずカウ
 
     assert.equal(world.sheets["ヘルスチェック"], undefined);
     assert.equal(world.properties.HEALTH_SUCCESS_COUNT, "10");
+});
+
+test("設定: NOTIFY_SCALE 未設定はエラーにする", () => {
+    resetWorld();
+    delete world.properties.NOTIFY_SCALE;
+
+    assert.throws(() => gas.loadConfig(properties), /NOTIFY_SCALE/);
+});
+
+test("設定: プレースホルダーが残っていたらエラーにする", () => {
+    resetWorld();
+    world.properties.CLIENT_ID = "REPLACE_WITH_CLIENT_ID";
+
+    assert.throws(() => gas.loadConfig(properties), /プレースホルダー/);
+});
+
+test("設定: 固定フォームURLモードではテンプレート不要", () => {
+    resetWorld();
+    delete world.properties.FORM_TEMPLATE_ID;
+    world.properties.FIXED_FORM_URL = "https://example.invalid/fixed-form";
+    world.earthquakeResponse = [testEvent(daytimeEventTime(), "東京湾", 45)];
+
+    gas.checkAndNotifyEarthquake();
+
+    assert.equal(world.copiedFormNames.length, 0);
+    assert.equal(world.sentMessages.length, 1);
+    assert.ok(
+        world.sentMessages[0].indexOf("https://example.invalid/fixed-form") !== -1
+    );
+
+    const { state } = currentState();
+    assert.equal(Object.keys(state.forms).length, 0);
+});
+
+test("設定: API URLとトークンURLを上書きできる", () => {
+    resetWorld();
+    world.properties.P2PQUAKE_API_URL =
+        "https://api.example.test/v2/jma/quake?limit=1";
+    world.properties.LINEWORKS_TOKEN_URL = "https://auth.example.test/token";
+    world.earthquakeResponse = [testEvent(daytimeEventTime(), "東京湾", 45)];
+
+    const config = gas.loadConfig(properties);
+    assert.equal(
+        gas.buildP2pquakeUrl(config),
+        "https://api.example.test/v2/jma/quake?limit=10"
+    );
+
+    gas.checkAndNotifyEarthquake();
+
+    assert.ok(
+        world.requestedUrls.indexOf("https://auth.example.test/token") !== -1
+    );
+});
+
+test("疎通確認: 通常通知先と保守通知先の両方へ送る", () => {
+    resetWorld();
+    world.properties.MAINTENANCE_ROOM_ID = "maintenance";
+
+    gas.connectivityCheck();
+
+    assert.equal(world.sentMessages.length, 2);
+    assert.equal(world.sentRooms[0], "room");
+    assert.equal(world.sentRooms[1], "maintenance");
+    assert.ok(world.sentMessages[0].indexOf("通知用チャット疎通確認") !== -1);
+    assert.ok(world.sentMessages[1].indexOf("保守通知用チャット疎通確認") !== -1);
+
+    // 保守通知先が未設定なら通常通知先の1回だけ
+    resetWorld();
+    gas.connectivityCheck();
+    assert.equal(world.sentMessages.length, 1);
+    assert.equal(world.sentRooms[0], "room");
+});
+
+test("障害通知: fingerprintに例外名を含める", () => {
+    const first = gas.fingerprintError("check_failed", {
+        name: "TypeError",
+        message: "同じメッセージ",
+    });
+    const second = gas.fingerprintError("check_failed", {
+        name: "RangeError",
+        message: "同じメッセージ",
+    });
+
+    assert.notEqual(first, second);
+    assert.equal(first.length, 64);
+});
+
+test("セットアップ確認: トリガー間隔の記録がないとNG", () => {
+    resetWorld();
+    world.triggers = [
+        { getHandlerFunction: () => "checkAndNotifyEarthquake" },
+        { getHandlerFunction: () => "writeHourlyHealthCheck" },
+    ];
+
+    assert.equal(gas.setupCheck(), false);
+
+    world.properties.TRIGGER_CHECK_INTERVAL_MINUTES = "1";
+    world.properties.TRIGGER_HEALTH_INTERVAL_HOURS = "1";
+
+    assert.equal(gas.setupCheck(), true);
 });
 
 // ---------------------------------------------------------------- Runner

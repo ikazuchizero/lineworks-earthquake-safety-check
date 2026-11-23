@@ -5,6 +5,7 @@ function runSelfTests() {
     testQuietWindowBasics();
     testCandidateBasics();
     testUrlBuild();
+    testQuietCandidateSelection();
     testSelection();
 
     console.log("セルフテスト: すべて成功");
@@ -164,6 +165,100 @@ function testUrlBuild() {
 
     assert(url.indexOf("limit=10") !== -1, "limitを10に上書きする");
     assert(url.indexOf("limit=1&") === -1, "古いlimitは残らない");
+}
+
+function testQuietCandidateSelection() {
+    const config = selfTestConfig();
+    const context = selfTestContext();
+
+    // 同じ静穏時間帯に複数候補がある場合は、震度が最大のものを採用する
+    let state = createEmptyState();
+    let targets = selectNotificationTargets(
+        [
+            selfTestEvent("2026/11/23 02:00:00", "東京湾", 45),
+            selfTestEvent("2026/11/23 03:00:00", "茨城県沖", 50),
+        ],
+        state,
+        config,
+        selfTestNow("2026/11/23 03:01:00"),
+        context
+    );
+    assert(targets.length === 0, "静穏時間は即通知しない");
+    assert(
+        state.quietBatch.candidate.hypocenterName === "茨城県沖",
+        "複数候補から最大震度を採用する"
+    );
+
+    // 同震度なら後発を採用する
+    targets = selectNotificationTargets(
+        [selfTestEvent("2026/11/23 04:00:00", "千葉県東方沖", 50)],
+        state,
+        config,
+        selfTestNow("2026/11/23 04:01:00"),
+        context
+    );
+    assert(targets.length === 0, "静穏時間中は通知しない");
+    assert(
+        state.quietBatch.candidate.earthquakeTime === "2026/11/23 04:00:00",
+        "同震度なら後発を採用する"
+    );
+
+    // 静穏時間が終わったら、採用した1件だけ通知する
+    targets = selectNotificationTargets(
+        [],
+        state,
+        config,
+        selfTestNow("2026/11/23 06:01:00"),
+        context
+    );
+    assert(targets.length === 1, "静穏時間終了後に1件だけ通知する");
+    assert(
+        targets[0].earthquakeTime === "2026/11/23 04:00:00",
+        "採用した候補を通知する"
+    );
+
+    // 日をまたぐ静穏時間（22〜6）でも同じ夜を1つの時間帯として扱う
+    const wrapping = selfTestConfig({ quietHoursStart: 22, quietHoursEnd: 6 });
+    state = createEmptyState();
+    targets = selectNotificationTargets(
+        [selfTestEvent("2026/11/23 23:30:00", "東京湾", 45)],
+        state,
+        wrapping,
+        selfTestNow("2026/11/23 23:31:00"),
+        context
+    );
+    assert(targets.length === 0, "日跨ぎ静穏時間は即通知しない");
+    assert(!!state.quietBatch, "日跨ぎ静穏バッチを作る");
+
+    const windowStart = state.quietBatch.windowStart;
+    targets = selectNotificationTargets(
+        [selfTestEvent("2026/11/24 01:00:00", "茨城県沖", 50)],
+        state,
+        wrapping,
+        selfTestNow("2026/11/24 01:01:00"),
+        context
+    );
+    assert(
+        String(state.quietBatch.windowStart) === String(windowStart),
+        "同じ夜は同じ静穏時間帯になる"
+    );
+    assert(
+        state.quietBatch.candidate.hypocenterName === "茨城県沖",
+        "同じ夜の候補を更新する"
+    );
+
+    targets = selectNotificationTargets(
+        [],
+        state,
+        wrapping,
+        selfTestNow("2026/11/24 06:01:00"),
+        context
+    );
+    assert(targets.length === 1, "日跨ぎ静穏時間の終了後に通知する");
+    assert(
+        targets[0].earthquakeTime === "2026/11/24 01:00:00",
+        "日跨ぎ時間帯の採用候補を通知する"
+    );
 }
 
 function testSelection() {

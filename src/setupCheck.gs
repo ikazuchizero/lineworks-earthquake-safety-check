@@ -25,20 +25,25 @@ function setupCheck() {
     }
 
     if (config) {
-        try {
-            const template = FormApp.openById(config.formTemplateId);
+        if (config.fixedFormUrl) {
+            // 固定URLモードではテンプレートを要求しない
+            results.push(okResult("form_fixed_url"));
+        } else {
+            try {
+                const template = FormApp.openById(config.formTemplateId);
 
-            if (!template.supportsAdvancedResponderPermissions()) {
-                throw new Error(ERROR_MESSAGES.templateNotSupported);
+                if (!template.supportsAdvancedResponderPermissions()) {
+                    throw new Error(ERROR_MESSAGES.templateNotSupported);
+                }
+
+                if (template.collectsEmail()) {
+                    throw new Error(ERROR_MESSAGES.templateCollectsEmail);
+                }
+
+                results.push(okResult("form_template"));
+            } catch (e) {
+                results.push(ngResult("form_template", e.message));
             }
-
-            if (template.collectsEmail()) {
-                throw new Error(ERROR_MESSAGES.templateCollectsEmail);
-            }
-
-            results.push(okResult("form_template"));
-        } catch (e) {
-            results.push(ngResult("form_template", e.message));
         }
 
         try {
