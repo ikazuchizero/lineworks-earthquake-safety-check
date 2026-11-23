@@ -96,6 +96,9 @@ const PROPERTY_KEYS = {
     healthLastErrorTime: "HEALTH_LAST_ERROR_TIME",
     healthLastErrorMessage: "HEALTH_LAST_ERROR_MESSAGE",
     healthPeriodStartTime: "HEALTH_PERIOD_START_TIME",
+    // setupTriggers が保存する実行間隔（GAS APIでは間隔を取得できないため）
+    checkIntervalMinutes: "TRIGGER_CHECK_INTERVAL_MINUTES",
+    healthIntervalHours: "TRIGGER_HEALTH_INTERVAL_HOURS",
 };
 
 function loadConfig(properties) {

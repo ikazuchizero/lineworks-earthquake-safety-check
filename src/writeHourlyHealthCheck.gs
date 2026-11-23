@@ -3,8 +3,11 @@
 function writeHourlyHealthCheck() {
     const lock = LockService.getScriptLock();
 
-    if (!lock.tryLock(1000)) {
-        console.log("別の実行中のためヘルスチェックをスキップしました");
+    // メイン処理とロックを共有する。最大30秒待ち、取れなければ今回の記録は諦める
+    if (!lock.tryLock(30000)) {
+        console.warn(
+            "メイン処理が実行中のためヘルスチェックをスキップしました（次回の集計に含まれます）"
+        );
         return;
     }
 
@@ -26,7 +29,10 @@ function writeHourlyHealthCheck() {
 
         const expectedCount = CONFIG.expectedRunsPerHour;
         const totalCount = successCount + failureCount;
-        const successRate = expectedCount === 0 ? 0 : successCount / expectedCount;
+        // 予定回数を超えた場合や、ヘルスチェック自体がスキップされた時間が
+        // 含まれる場合でも100%を超えないようにする
+        const successRate =
+            expectedCount === 0 ? 0 : Math.min(successCount / expectedCount, 1);
 
         const lastSuccessTime = formatHealthTime(
             properties.getProperty(PROPERTY_KEYS.healthLastSuccessTime)

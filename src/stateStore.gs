@@ -8,6 +8,7 @@ function createEmptyState() {
         quietBatch: null,
         quietCompletedThrough: null,
         forms: {},
+        inflight: {},
     };
 }
 
@@ -48,6 +49,9 @@ function loadState(context) {
                 break;
             case "form":
                 state.forms[key] = parseStateJson(raw, type, key, rowNumber);
+                break;
+            case "inflight":
+                state.inflight[key] = parseStateJson(raw, type, key, rowNumber);
                 break;
             case "quiet":
                 state.quietBatch = parseStateJsonOrNull(raw, type, key, rowNumber);
@@ -148,6 +152,10 @@ function saveState(context, state) {
         rows.push(["form", key, JSON.stringify(state.forms[key]), updatedAt]);
     }
 
+    for (const key of Object.keys(state.inflight)) {
+        rows.push(["inflight", key, JSON.stringify(state.inflight[key]), updatedAt]);
+    }
+
     rows.push([
         "quiet",
         "current",
@@ -187,6 +195,13 @@ function writeStateRows(sheet, rows) {
 function pruneState(state, now, config) {
     const cutoff = now.getTime() - config.stateRetentionDays * 24 * 60 * 60 * 1000;
 
+    pruneNotified(state, cutoff, config);
+    prunePendingUnknown(state, cutoff);
+    pruneForms(state, cutoff, config);
+    pruneInflight(state, cutoff);
+}
+
+function pruneNotified(state, cutoff, config) {
     for (const key of Object.keys(state.notified)) {
         const record = state.notified[key];
         const notifiedAt = record && record.notifiedAt ? parseTokyoTime(record.notifiedAt) : null;
@@ -239,7 +254,24 @@ function pruneState(state, now, config) {
             delete state.notifiedByTime[key];
         }
     }
+}
 
+function prunePendingUnknown(state, cutoff) {
+    for (const key of Object.keys(state.pendingUnknown)) {
+        const record = state.pendingUnknown[key];
+        const firstSeenAt = record && record.firstSeenAt
+            ? parseTokyoTime(record.firstSeenAt)
+            : null;
+
+        if (!firstSeenAt || firstSeenAt.getTime() < cutoff) {
+            delete state.pendingUnknown[key];
+        }
+    }
+}
+
+// 通知済みと同じ上限（件数）をフォーム履歴にも適用する。
+// 「状態全体で500件」ではなく、種別ごとの上限であることに注意。
+function pruneForms(state, cutoff, config) {
     for (const key of Object.keys(state.forms)) {
         const record = state.forms[key];
         const createdAt = record && record.createdAt ? parseTokyoTime(record.createdAt) : null;
@@ -249,14 +281,49 @@ function pruneState(state, now, config) {
         }
     }
 
-    for (const key of Object.keys(state.pendingUnknown)) {
-        const record = state.pendingUnknown[key];
-        const firstSeenAt = record && record.firstSeenAt
-            ? parseTokyoTime(record.firstSeenAt)
+    const keys = Object.keys(state.forms);
+
+    if (keys.length <= config.maxNotifiedRecords) {
+        return;
+    }
+
+    const sorted = keys
+        .map(function (key) {
+            const record = state.forms[key];
+            const createdAt = record && record.createdAt
+                ? parseTokyoTime(record.createdAt)
+                : null;
+            return { key: key, time: createdAt ? createdAt.getTime() : 0 };
+        })
+        .sort(function (left, right) {
+            return left.time - right.time;
+        });
+
+    const removeCount = sorted.length - config.maxNotifiedRecords;
+
+    for (let i = 0; i < removeCount; i++) {
+        delete state.forms[sorted[i].key];
+    }
+}
+
+function pruneInflight(state, cutoff) {
+    for (const key of Object.keys(state.inflight)) {
+        const record = state.inflight[key];
+        const startedAt = record && record.startedAt
+            ? parseTokyoTime(record.startedAt)
             : null;
 
-        if (!firstSeenAt || firstSeenAt.getTime() < cutoff) {
-            delete state.pendingUnknown[key];
+        if (!startedAt || startedAt.getTime() < cutoff) {
+            delete state.inflight[key];
+            continue;
+        }
+
+        // 通知済み・同じ発生時刻が通知済みなら送信中マークは不要
+        if (
+            state.notified[key] ||
+            (record && record.earthquakeTime && state.notifiedByTime[record.earthquakeTime])
+        ) {
+            delete state.inflight[key];
         }
     }
 }

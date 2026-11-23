@@ -51,6 +51,7 @@ const LOG_MESSAGES = {
     quietCaptured: "静穏時間のため保留",
     quietReleased: "静穏時間終了後に通知",
     belowScale: "通知対象外",
+    inflightRetry: "前回の送信結果不明のため再送",
 };
 
 function createHttpError(message, code, body) {

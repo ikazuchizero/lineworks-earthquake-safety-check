@@ -13,9 +13,11 @@ function resolveFormForNotification(context, state, target) {
     if (!record || !record.formId) {
         assertTemplateCanPublish(context.config);
 
-        const formId = copyFormTemplate(target, context.config);
+        const formName = buildFormName(target.earthquakeTime, context.config);
+        const formId = copyFormTemplate(formName, context.config);
         record = {
             formId: formId,
+            formName: formName,
             createdAt: new Date().toISOString(),
         };
         state.forms[earthquakeTime] = record;
@@ -69,25 +71,62 @@ function assertTemplateCanPublish(config) {
     checkedTemplateId = config.formTemplateId;
 }
 
-function copyFormTemplate(target, config) {
-    try {
-        const templateFile = DriveApp.getFileById(config.formTemplateId);
-        const name =
-            config.formTitlePrefix + " " + buildFormName(target.earthquakeTime);
+// 地震ごとに決まる一意な名前。コピー直後に中断しても、次回この名前で再利用する。
+function buildFormName(earthquakeTime, config) {
+    const prefix = (config && config.formTitlePrefix) || CONFIG.formTitlePrefix;
+    const date = parseTokyoTime(earthquakeTime);
 
-        return templateFile.makeCopy(name).getId();
+    if (!date) {
+        return (
+            prefix +
+            " " +
+            String(earthquakeTime).replace(/[\/\\:]/g, "-")
+        );
+    }
+
+    return (
+        prefix +
+        " " +
+        Utilities.formatDate(date, "Asia/Tokyo", "yyyyMMdd-HHmmss")
+    );
+}
+
+function copyFormTemplate(formName, config) {
+    try {
+        // makeCopy 成功後に状態保存が失敗しても、次回は同じ名前のコピーを使う
+        const existingFormId = findExistingFormId(formName);
+
+        if (existingFormId) {
+            console.log("中断前のフォームコピーを再利用します: " + formName);
+            return existingFormId;
+        }
+
+        const templateFile = DriveApp.getFileById(config.formTemplateId);
+
+        return templateFile.makeCopy(formName).getId();
     } catch (e) {
         throw new Error(ERROR_MESSAGES.formCopyFailed + ": " + e.message);
     }
 }
 
-// Driveのファイル名に使えない文字を避ける
-function buildFormName(earthquakeTime) {
-    const date = parseTokyoTime(earthquakeTime);
+function findExistingFormId(formName) {
+    const files = DriveApp.getFilesByName(formName);
+    let oldest = null;
 
-    if (!date) {
-        return String(earthquakeTime).replace(/[\/\\:]/g, "-");
+    while (files.hasNext()) {
+        const file = files.next();
+
+        if (file.getMimeType() !== MimeType.GOOGLE_FORMS) {
+            continue;
+        }
+
+        if (
+            !oldest ||
+            file.getDateCreated().getTime() < oldest.getDateCreated().getTime()
+        ) {
+            oldest = file;
+        }
     }
 
-    return Utilities.formatDate(date, "Asia/Tokyo", "yyyyMMdd-HHmmss");
+    return oldest ? oldest.getId() : null;
 }

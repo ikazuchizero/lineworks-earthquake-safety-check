@@ -1,6 +1,7 @@
 // 定期実行トリガーを設定するファイル
 
 function setupTriggers() {
+    const properties = PropertiesService.getScriptProperties();
     const triggers = ScriptApp.getProjectTriggers();
 
     for (const trigger of triggers) {
@@ -20,6 +21,10 @@ function setupTriggers() {
         .timeBased()
         .everyHours(1)
         .create();
+
+    // GAS APIではトリガーの実行間隔を取得できないため、設定した間隔を保存する
+    properties.setProperty(PROPERTY_KEYS.checkIntervalMinutes, "1");
+    properties.setProperty(PROPERTY_KEYS.healthIntervalHours, "1");
 
     console.log(
         "トリガーを設定しました: checkAndNotifyEarthquake（1分ごと）, writeHourlyHealthCheck（1時間ごと）"

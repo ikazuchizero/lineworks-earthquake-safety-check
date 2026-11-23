@@ -54,22 +54,43 @@ function setupCheck() {
 
     try {
         const triggers = ScriptApp.getProjectTriggers();
-        const hasCheck = triggers.some(function (trigger) {
+        const checkTriggers = triggers.filter(function (trigger) {
             return trigger.getHandlerFunction() === "checkAndNotifyEarthquake";
         });
-        const hasHealth = triggers.some(function (trigger) {
+        const healthTriggers = triggers.filter(function (trigger) {
             return trigger.getHandlerFunction() === "writeHourlyHealthCheck";
         });
 
-        if (hasCheck && hasHealth) {
-            results.push(okResult("triggers"));
-        } else {
+        if (checkTriggers.length !== 1 || healthTriggers.length !== 1) {
             results.push(
                 ngResult(
                     "triggers",
-                    "setupTriggers() を実行して定期実行を設定してください"
+                    "各トリガーが1つだけになるよう setupTriggers() を実行してください（現在: check=" +
+                        checkTriggers.length +
+                        ", health=" +
+                        healthTriggers.length +
+                        "）"
                 )
             );
+        } else {
+            // GAS APIでは実行間隔を取得できないため、setupTriggers が保存した値で確認する
+            const checkMinutes = properties.getProperty(
+                PROPERTY_KEYS.checkIntervalMinutes
+            );
+            const healthHours = properties.getProperty(
+                PROPERTY_KEYS.healthIntervalHours
+            );
+
+            if (checkMinutes === "1" && healthHours === "1") {
+                results.push(okResult("triggers"));
+            } else {
+                results.push(
+                    ngResult(
+                        "triggers",
+                        "実行間隔の記録がありません。setupTriggers() を再実行してください"
+                    )
+                );
+            }
         }
     } catch (e) {
         results.push(ngResult("triggers", e.message));
