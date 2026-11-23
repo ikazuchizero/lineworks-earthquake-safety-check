@@ -395,6 +395,7 @@ const gas = new Function(
             "recordExecutionFailure",
             "recordExecutionSkipped",
             "CHECK_INTERVAL_MINUTES",
+            "createEarthquakeMessage",
         ].join(", ") +
         "};"
 )(
@@ -1033,6 +1034,18 @@ test("セットアップ確認: 固定URLのGoogleフォームは回答受付を
 
     world.forms["url:" + url].accepting = false;
     assert.equal(gas.setupCheck(), false);
+});
+
+test("メッセージ: 震源不明はUNKNOWNと表示せず「調査中」にする", () => {
+    const message = gas.createEarthquakeMessage(
+        { earthquakeTime: "2026/11/23 07:49:00", hypocenterName: "UNKNOWN", maxScale: 30 },
+        "https://example.com/form"
+    );
+
+    assert.ok(message.indexOf("UNKNOWN") === -1);
+    assert.ok(message.indexOf("震源地：調査中") !== -1);
+    assert.ok(message.indexOf("最大震度：3") !== -1);
+    assert.ok(message.indexOf("https://example.com/form") !== -1);
 });
 
 test("障害記録: 長すぎるエラーメッセージを切り詰める", () => {

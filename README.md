@@ -153,6 +153,7 @@ checkAndNotifyEarthquake
 - 震源地名が空の情報は即通知せず、`UNKNOWN_HYPOCENTER_HOLD_SECONDS` 秒だけ待ちます。
 - 待機中に同じ発生時刻の震源地名あり情報が来たら、そちらを通知します。
 - 期限を過ぎても震源地名あり情報が来ない場合だけ、UNKNOWN のまま1回通知します。
+- 通知本文では内部値の `UNKNOWN` を出さず、**「震源地：調査中」** と表示します。
 - `UNKNOWN_HYPOCENTER_HOLD_SECONDS` は `MAX_NOTIFICATION_AGE_HOURS` より短くしてください。長いと、保留期限が来る前に古い情報として整理されます。
 
 ### 静穏時間

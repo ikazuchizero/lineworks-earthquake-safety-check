@@ -2,7 +2,12 @@
 
 function createEarthquakeMessage(target, formUrl) {
     const formattedTime = formatEarthquakeTime(target.earthquakeTime);
-    const hypocenterName = target.hypocenterName || "不明";
+    const rawHypocenterName = String(target.hypocenterName || "").trim();
+    // 内部値の "UNKNOWN" をそのまま利用者に見せない
+    const hypocenterName =
+        rawHypocenterName === "" || rawHypocenterName === "UNKNOWN"
+            ? "調査中"
+            : rawHypocenterName;
     const scale = scaleText(target.maxScale);
 
     return `お疲れ様です。
