@@ -43,7 +43,11 @@ function resolveFormForNotification(context, state, target) {
     if (!form) {
         assertTemplateCanPublish(context.config);
 
-        const formName = buildFormName(earthquakeTime, context.config);
+        const formName = buildFormName(
+            earthquakeTime,
+            target.hypocenterName,
+            context.config
+        );
         const formId = copyFormTemplate(formName, context.config, failedFormId);
         record = {
             formId: formId,
@@ -111,23 +115,39 @@ function assertTemplateCanPublish(config) {
 }
 
 // 地震ごとに決まる一意な名前。コピー直後に中断しても、次回この名前で再利用する。
-function buildFormName(earthquakeTime, config) {
+// 震源地を入れて、Drive 上でどの地震のフォームか分かるようにする
+function buildFormName(earthquakeTime, hypocenterName, config) {
     const prefix = (config && config.formTitlePrefix) || CONFIG.formTitlePrefix;
+    const place = formatHypocenterForFormName(hypocenterName);
     const date = parseTokyoTime(earthquakeTime);
 
     if (!date) {
         return (
             prefix +
             " " +
-            String(earthquakeTime).replace(/[\/\\:]/g, "-")
+            String(earthquakeTime).replace(/[\/\\:]/g, "-") +
+            " " +
+            place
         );
     }
 
     return (
         prefix +
         " " +
-        Utilities.formatDate(date, "Asia/Tokyo", "yyyyMMdd-HHmmss")
+        Utilities.formatDate(date, "Asia/Tokyo", "yyyyMMdd-HHmmss") +
+        " " +
+        place
     );
+}
+
+function formatHypocenterForFormName(value) {
+    const name = String(value === null || value === undefined ? "" : value).trim();
+
+    if (name === "" || name === "UNKNOWN") {
+        return "震源不明";
+    }
+
+    return name;
 }
 
 function copyFormTemplate(formName, config, excludeFormId) {

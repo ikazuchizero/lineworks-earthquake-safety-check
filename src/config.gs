@@ -147,7 +147,7 @@ function loadConfig(properties) {
         throw new Error(ERROR_MESSAGES.notifyScaleInvalid);
     }
 
-    // 固定フォームURLモード（PHP版 form_stock_enabled=false 相当）。
+    // 固定フォームURLモード（1つのフォームを全地震で使い回す）。
     // 指定時はテンプレート複製を行わず、FORM_TEMPLATE_ID は不要。
     const fixedFormUrl = readOptionalProperty(properties, PROPERTY_KEYS.fixedFormUrl);
     let formTemplateId = "";

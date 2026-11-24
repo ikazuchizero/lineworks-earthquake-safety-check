@@ -34,7 +34,7 @@ GAS の `setPublished(true)` で回答者 URL を公開します。組織のポ�
 | 自動複製（既定） | `FORM_TEMPLATE_ID` | 地震ごとにテンプレートを複製し、公開して回答者 URL を使う |
 | 固定 URL | `FIXED_FORM_URL` | 複製・公開を行わず、設定した URL を毎回使う。`FORM_TEMPLATE_ID` は不要 |
 
-固定 URL モードは PHP 版の `form_stock_enabled=false`（検証用の固定フォーム）に相当します。両方設定した場合は固定 URL を優先します。URL は `https://` のみ許可します。`docs.google.com/forms/d/.../edit` の編集URLなら `setupCheck` が回答受付中かまで確認しますが、公開URL（`/viewform`）や外部URLは手動確認となります。
+固定 URL モードは、1つのフォームを全地震で使い回す方式です。両方設定した場合は固定 URL を優先します。URL は `https://` のみ許可します。`docs.google.com/forms/d/.../edit` の編集URLなら `setupCheck` が回答受付中かまで確認しますが、公開URL（`/viewform`）や外部URL（LINE WORKS フォームなど）は手動確認となります。
 
 ## セットアップ
 
@@ -233,26 +233,21 @@ node tests/run-tests.js
 
 ## PHP 版（`codex/setup-check`）との対応
 
-### フォーム方式（確定した設計差）
+### フォーム方式
 
-GAS 版は PHP 版の「フォーム URL 在庫管理」を移植せず、**地震ごとの自動複製方式**を正式な仕様とします。GAS には `FormApp` / `DriveApp` があり、在庫 JSON や CSV の補充・移動をファイルシステムで運用する必要がないためです。
+GAS 版のフォーム方式は次の2つだけです。
+
+| 方式 | 設定 | 動作 |
+|---|---|---|
+| 自動複製（既定） | `FORM_TEMPLATE_ID` | 地震ごとにテンプレートを複製し、フォーム名に震源地を入れる |
+| 固定 URL | `FIXED_FORM_URL` | 1つのフォームを使い回す（LINE WORKS フォームも可） |
 
 | PHP 版の機能 | GAS 版 | 扱い |
 |---|---|---|
-| フォーム URL 在庫（`forms.json`） | 地震ごとのフォーム複製と `状態` シートのフォーム履歴 | 設計変更（在庫管理は行わない） |
-| CSV からフォーム URL を補充 | なし | 未移植（自動複製で代替） |
-| 使用済みフォーム管理 | 発生時刻ごとの複製フォーム管理 | 設計変更 |
-| 在庫枯渇時の通知スキップ | なし（枯渇の概念がない） | 対象外 |
-| 枯渇通知の失敗再試行 | なし | 対象外 |
-| 在庫0件の6時間ごとのリマインド | なし | 対象外 |
-| フォーム残数低下通知 | なし | 対象外 |
-| CSV 取り込み失敗時も地震チェックを継続 | CSV 取り込みなし | 対象外 |
 | 固定フォーム URL モード | `FIXED_FORM_URL` | 移植 |
 | 保守通知先への疎通確認 | `connectivityCheck` が通常・保守の両方へ送信 | 移植 |
 | ヘルスチェックのログ集計 | 1時間単位の実行回数・成功率集計 | 設計変更 |
 | PHP ログファイルへの構造化ログ | スプレッドシートの `地震ログ` | 設計変更 |
-
-在庫枯渇・残数低下・定期リマインドは、自動複製方式では発生しないため実装していません。必要になった場合は、複製失敗の通知（既存の障害通知）で検知します。
 
 ### 設定検証
 
@@ -263,7 +258,7 @@ GAS 版は PHP 版の「フォーム URL 在庫管理」を移植せず、**地�
 | 固定フォーム URL モード | `FIXED_FORM_URL` で対応 |
 | P2PQuake URL を設定可能 | `P2PQUAKE_API_URL` で対応（httpsのみ） |
 | LINE WORKS トークン URL を設定可能 | `LINEWORKS_TOKEN_URL` で対応（httpsのみ） |
-| フォーム在庫関連の設定検証 | テンプレートの公開対応・メール収集設定・テンプレートファイルへのアクセスを検証 |
+| フォームの設定検証 | テンプレートの公開対応・メール収集設定・テンプレートファイルへのアクセスを検証 |
 | 静穏時間の設定 | GAS版独自。`QUIET_HOURS_ENABLED` で無効化可能 |
 
 ### 障害通知・状態管理
@@ -274,7 +269,7 @@ GAS 版は PHP 版の「フォーム URL 在庫管理」を移植せず、**地�
 
 ### テストについて
 
-PHP 版 `codex/setup-check` のテストは 39 件（`ConfigTest` 4、`ConnectivityCheckerTest` 2、`EarthquakeCheckerTest` 11、`ErrorNotificationStoreTest` 2、`FailureNotifierTest` 3、`FormStockStoreTest` 2、`HealthCheckerTest` 1、`LineWorksClientTest` 1、`LoggerTest` 1、`P2PQuakeClientTest` 2、`SetupCheckerTest` 7、`StateStoreTest` 2、`TestRegistryTest` 1）です。GAS 版は PHP のテストをそのまま流用できないため、同等の判定を `runSelfTests` と `tests/run-tests.js`（36件）で個別に検証します。フォーム在庫関連のテストは、在庫管理を行わない設計のため対象外です。
+PHP 版 `codex/setup-check` のテストは 39 件（`ConfigTest` 4、`ConnectivityCheckerTest` 2、`EarthquakeCheckerTest` 11、`ErrorNotificationStoreTest` 2、`FailureNotifierTest` 3、`FormStockStoreTest` 2、`HealthCheckerTest` 1、`LineWorksClientTest` 1、`LoggerTest` 1、`P2PQuakeClientTest` 2、`SetupCheckerTest` 7、`StateStoreTest` 2、`TestRegistryTest` 1）です。GAS 版は PHP のテストをそのまま流用できないため、同等の判定を `runSelfTests` と `tests/run-tests.js`（42件）で個別に検証します。
 
 ## ファイル構成
 
