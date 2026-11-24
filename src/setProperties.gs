@@ -67,6 +67,87 @@ function setAllProperties() {
     );
 }
 
+// 通知先ルームの channelId を調べる（ROOM_ID が不明なとき用）
+function diagnoseBot() {
+    const props = PropertiesService.getScriptProperties();
+    const clientId = props.getProperty("CLIENT_ID");
+    const clientSecret = props.getProperty("CLIENT_SECRET");
+    const serviceAcct = props.getProperty("SERVICE_ACCT");
+    const botId = props.getProperty("BOT_ID");
+    const key = normalizePrivateKey(props.getProperty("PRIVATE_KEY"));
+    const tokenUrl = "https://auth.worksmobile.com/oauth2/v2.0/token";
+    const now = Math.floor(Date.now() / 1000);
+    const b64 = function (value) {
+        return Utilities.base64EncodeWebSafe(value).replace(/=+$/, "");
+    };
+
+    const input =
+        b64(JSON.stringify({ alg: "RS256", typ: "JWT" })) +
+        "." +
+        b64(
+            JSON.stringify({
+                iss: clientId,
+                sub: serviceAcct,
+                iat: now,
+                exp: now + 3600,
+                aud: tokenUrl,
+            })
+        );
+    const jwt = input + "." + b64(Utilities.computeRsaSha256Signature(input, key));
+
+    const res = UrlFetchApp.fetch(tokenUrl, {
+        method: "post",
+        muteHttpExceptions: true,
+        payload: {
+            grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+            assertion: jwt,
+            client_id: clientId,
+            client_secret: clientSecret,
+            scope: "bot",
+        },
+    });
+
+    console.log("token HTTP=" + res.getResponseCode());
+
+    if (res.getResponseCode() !== 200) {
+        console.log(res.getContentText());
+        return;
+    }
+
+    const token = JSON.parse(res.getContentText()).access_token;
+    const headers = { Authorization: "Bearer " + token };
+
+    const bot = UrlFetchApp.fetch(
+        "https://www.worksapis.com/v1.0/bots/" + encodeURIComponent(botId),
+        { headers: headers, muteHttpExceptions: true }
+    );
+    console.log("bot HTTP=" + bot.getResponseCode());
+
+    const channels = UrlFetchApp.fetch(
+        "https://www.worksapis.com/v1.0/bots/" +
+            encodeURIComponent(botId) +
+            "/channels",
+        { headers: headers, muteHttpExceptions: true }
+    );
+    console.log("channels HTTP=" + channels.getResponseCode());
+
+    if (channels.getResponseCode() !== 200) {
+        console.log(channels.getContentText());
+        return;
+    }
+
+    const list = JSON.parse(channels.getContentText()).channels || [];
+
+    if (list.length === 0) {
+        console.log("Bot が参加しているルームがありません（招待を確認）");
+        return;
+    }
+
+    list.forEach(function (channel) {
+        console.log("- " + channel.channelId + " | " + (channel.title || ""));
+    });
+}
+
 // 必須キーが入っているかを、値を出さずに確認する
 function showPropertyStatus() {
     const requiredKeys = [
