@@ -649,17 +649,15 @@ test("メイン処理: フォーム複製・送信・状態保存・再実行で
     assert.equal(world.copiedFormNames.length, 1);
 });
 
-test("フォーム名: 震源地を含める（不明は震源不明）", () => {
+test("フォーム名: 震源地だけを使う（不明は震源不明）", () => {
     resetWorld();
     const { config } = currentState();
-    const eventTime = "2026/11/23 07:49:00";
 
-    const named = gas.buildFormName(eventTime, "天草灘", config);
-    assert.ok(named.indexOf("天草灘") !== -1);
-    assert.ok(named.indexOf("20261123-074900") !== -1);
+    const named = gas.buildFormName("天草灘", config);
+    assert.equal(named, "安否確認 天草灘");
 
-    const unknown = gas.buildFormName(eventTime, "UNKNOWN", config);
-    assert.ok(unknown.indexOf("震源不明") !== -1);
+    const unknown = gas.buildFormName("UNKNOWN", config);
+    assert.equal(unknown, "安否確認 震源不明");
     assert.equal(unknown.indexOf("UNKNOWN"), -1);
 });
 
@@ -669,7 +667,7 @@ test("コピー直後に中断しても、同じ名前のフォームを再利�
     world.earthquakeResponse = [testEvent(eventTime, "東京湾", 45)];
 
     const { config } = currentState();
-    const formName = gas.buildFormName(eventTime, "東京湾", config);
+    const formName = gas.buildFormName("東京湾", config);
     registerDriveFile("orphan-form", formName, MimeType.GOOGLE_FORMS);
 
     gas.checkAndNotifyEarthquake();

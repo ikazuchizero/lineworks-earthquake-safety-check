@@ -43,12 +43,20 @@ function resolveFormForNotification(context, state, target) {
     if (!form) {
         assertTemplateCanPublish(context.config);
 
-        const formName = buildFormName(
-            earthquakeTime,
-            target.hypocenterName,
-            context.config
+        const formName = buildFormName(target.hypocenterName, context.config);
+        const usedFormIds = {};
+        Object.keys(state.forms).forEach(function (key) {
+            const saved = state.forms[key];
+            if (saved && saved.formId) {
+                usedFormIds[String(saved.formId)] = true;
+            }
+        });
+        const formId = copyFormTemplate(
+            formName,
+            context.config,
+            failedFormId,
+            usedFormIds
         );
-        const formId = copyFormTemplate(formName, context.config, failedFormId);
         record = {
             formId: formId,
             formName: formName,
@@ -114,30 +122,13 @@ function assertTemplateCanPublish(config) {
     checkedTemplateId = config.formTemplateId;
 }
 
-// 地震ごとに決まる一意な名前。コピー直後に中断しても、次回この名前で再利用する。
-// 震源地を入れて、Drive 上でどの地震のフォームか分かるようにする
-function buildFormName(earthquakeTime, hypocenterName, config) {
+// 地震ごとのフォーム名。震源地だけにして、Drive 上で見分けやすくする。
+// 同じ震源地の地震が起きると同名になるため、複製の再利用時は
+// 他の地震に割り当て済みのフォームを避ける（copyFormTemplate 側で判定）。
+function buildFormName(hypocenterName, config) {
     const prefix = (config && config.formTitlePrefix) || CONFIG.formTitlePrefix;
-    const place = formatHypocenterForFormName(hypocenterName);
-    const date = parseTokyoTime(earthquakeTime);
 
-    if (!date) {
-        return (
-            prefix +
-            " " +
-            String(earthquakeTime).replace(/[\/\\:]/g, "-") +
-            " " +
-            place
-        );
-    }
-
-    return (
-        prefix +
-        " " +
-        Utilities.formatDate(date, "Asia/Tokyo", "yyyyMMdd-HHmmss") +
-        " " +
-        place
-    );
+    return prefix + " " + formatHypocenterForFormName(hypocenterName);
 }
 
 function formatHypocenterForFormName(value) {
@@ -150,11 +141,15 @@ function formatHypocenterForFormName(value) {
     return name;
 }
 
-function copyFormTemplate(formName, config, excludeFormId) {
+function copyFormTemplate(formName, config, excludeFormId, usedFormIds) {
     try {
         // makeCopy 成功後に状態保存が失敗しても、次回は同じ名前のコピーを使う。
-        // ただし、直前に開けなかったフォームIDは再利用しない。
-        const existingFormId = findExistingFormId(formName, excludeFormId);
+        // ただし、直前に開けなかったフォームIDと、他の地震に割り当て済みのフォームは再利用しない。
+        const existingFormId = findExistingFormId(
+            formName,
+            excludeFormId,
+            usedFormIds
+        );
 
         if (existingFormId) {
             console.log("中断前のフォームコピーを再利用します: " + formName);
@@ -169,8 +164,9 @@ function copyFormTemplate(formName, config, excludeFormId) {
     }
 }
 
-function findExistingFormId(formName, excludeFormId) {
+function findExistingFormId(formName, excludeFormId, usedFormIds) {
     const files = DriveApp.getFilesByName(formName);
+    const used = usedFormIds || {};
     let oldest = null;
 
     while (files.hasNext()) {
@@ -181,6 +177,10 @@ function findExistingFormId(formName, excludeFormId) {
         }
 
         if (excludeFormId && String(file.getId()) === String(excludeFormId)) {
+            continue;
+        }
+
+        if (used[String(file.getId())]) {
             continue;
         }
 
