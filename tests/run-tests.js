@@ -328,10 +328,16 @@ const UrlFetchApp = {
             };
         }
 
+        const status =
+            Array.isArray(world.earthquakeStatuses) &&
+            world.earthquakeStatuses.length > 0
+                ? world.earthquakeStatuses.shift()
+                : world.earthquakeStatus;
+
         return {
-            getResponseCode: () => world.earthquakeStatus,
+            getResponseCode: () => status,
             getContentText: () =>
-                world.earthquakeStatus === 200
+                status === 200
                     ? JSON.stringify(world.earthquakeResponse)
                     : "upstream error",
         };
@@ -396,6 +402,7 @@ const gas = new Function(
             "recordExecutionSkipped",
             "CHECK_INTERVAL_MINUTES",
             "createEarthquakeMessage",
+            "fetchEarthquakes",
         ].join(", ") +
         "};"
 )(
@@ -431,6 +438,7 @@ function resetWorld() {
     world.sheetWrites = [];
     world.earthquakeResponse = [];
     world.earthquakeStatus = 200;
+    world.earthquakeStatuses = [];
     world.sendStatus = 204;
     world.lockAvailable = true;
     world.userLockAvailable = true;
@@ -706,6 +714,27 @@ test("旧4列ログの見出しを7列へ更新する", () => {
     const header = world.sheets["地震ログ"].data[0];
     assert.equal(header.length, 7);
     assert.equal(header[6], "詳細");
+});
+
+test("地震API: 429のとき再試行して成功する", () => {
+    resetWorld();
+    world.earthquakeStatuses = [429, 200];
+    world.earthquakeResponse = [testEvent(daytimeEventTime(), "東京湾", 45)];
+
+    const config = gas.loadConfig(properties);
+    const events = gas.fetchEarthquakes(config);
+
+    assert.equal(events.length, 1);
+    assert.equal(world.requestedUrls.length, 2);
+});
+
+test("地震API: 4xxは再試行しない", () => {
+    resetWorld();
+    world.earthquakeStatuses = [400, 200];
+
+    const config = gas.loadConfig(properties);
+    assert.throws(() => gas.fetchEarthquakes(config));
+    assert.equal(world.requestedUrls.length, 1);
 });
 
 test("API失敗時は失敗通知・エラーログ・失敗カウントを残す", () => {
