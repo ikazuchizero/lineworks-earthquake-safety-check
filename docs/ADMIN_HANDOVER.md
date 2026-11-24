@@ -97,6 +97,11 @@ https://docs.google.com/spreadsheets/d/【ここがID】/edit
 > 固定URL方式（1つのフォームを使い回す）でよい場合は、この手順の代わりに
 > 「送信」→ URLを短縮 で得た `https://docs.google.com/forms/d/e/.../viewform` を控えてください。
 > その場合、Part 4 で `FIXED_FORM_URL` に設定します（`FORM_TEMPLATE_ID` は不要）。
+>
+> **LINE WORKS のフォームを使う場合も同じです。** フォームの回答URL（`https://` で始まるもの）を控え、
+> Part 4 で `FIXED_FORM_URL` に設定してください。Google フォームの作成は不要になります。
+> この場合、地震ごとにフォームを複製せず**全地震で同じURL**を使うため、回答は1つのフォームに集まります。
+> 回答受付中の自動チェックは行われないので、事前に回答できることを手動で確認してください。
 
 ---
 
