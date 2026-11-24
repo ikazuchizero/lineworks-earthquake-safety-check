@@ -94,7 +94,6 @@ const PROPERTY_KEYS = {
     roomId: "ROOM_ID",
     maintenanceRoomId: "MAINTENANCE_ROOM_ID",
     formTemplateId: "FORM_TEMPLATE_ID",
-    fixedFormUrl: "FIXED_FORM_URL",
     spreadsheetId: "SPREADSHEET_ID",
     notifyScale: "NOTIFY_SCALE",
     p2pquakeApiUrl: "P2PQUAKE_API_URL",
@@ -147,16 +146,10 @@ function loadConfig(properties) {
         throw new Error(ERROR_MESSAGES.notifyScaleInvalid);
     }
 
-    // 固定フォームURLモード（1つのフォームを全地震で使い回す）。
-    // 指定時はテンプレート複製を行わず、FORM_TEMPLATE_ID は不要。
-    const fixedFormUrl = readOptionalProperty(properties, PROPERTY_KEYS.fixedFormUrl);
-    let formTemplateId = "";
-
-    if (fixedFormUrl !== "") {
-        assertHttpsUrl(PROPERTY_KEYS.fixedFormUrl, fixedFormUrl);
-    } else {
-        formTemplateId = requireProperty(properties, PROPERTY_KEYS.formTemplateId);
-    }
+    const formTemplateId = requireProperty(
+        properties,
+        PROPERTY_KEYS.formTemplateId
+    );
 
     const p2pquakeApiUrl = readUrlProperty(
         properties,
@@ -243,7 +236,6 @@ function loadConfig(properties) {
         roomId: values[PROPERTY_KEYS.roomId],
         maintenanceRoomId: maintenanceRoomId,
         formTemplateId: formTemplateId,
-        fixedFormUrl: fixedFormUrl,
         notifyScale: notifyScale,
         unknownHypocenterHoldSeconds: unknownHypocenterHoldSeconds,
         quietHoursEnabled: quietHoursEnabled,

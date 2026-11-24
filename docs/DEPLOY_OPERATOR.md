@@ -231,9 +231,8 @@ const SETUP_VALUES = {
     // テスト用は 0。本番は 40（震度4以上）など
     NOTIFY_SCALE: "40",
 
-    // テンプレート複製方式ならこれ。固定URL方式なら FIXED_FORM_URL に置き換え
+    // 複製元の Google フォーム
     FORM_TEMPLATE_ID: "ここにフォームID",
-    // FIXED_FORM_URL: "https://docs.google.com/forms/d/e/.../viewform",
 };
 ```
 
@@ -250,7 +249,7 @@ const SETUP_VALUES = {
 | `CLIENT_ID` / `CLIENT_SECRET` / `SERVICE_ACCT` / `PRIVATE_KEY` / `BOT_ID` | 必須 | LINE WORKS の認証情報 |
 | `ROOM_ID` | 必須 | 通知先 channelId |
 | `NOTIFY_SCALE` | 必須 | 通知する震度コード（`0,10,20,30,40,45,50,55,60,70`） |
-| `FORM_TEMPLATE_ID` または `FIXED_FORM_URL` | どちらか必須 | フォームの供給方法 |
+| `FORM_TEMPLATE_ID` | 必須 | 複製元の Google フォーム ID |
 | `MAINTENANCE_ROOM_ID` | 任意 | 障害通知先。未設定なら `ROOM_ID` |
 | `QUIET_HOURS_ENABLED` / `QUIET_HOURS_START` / `QUIET_HOURS_END` | 任意 | 既定 `true` / `0` / `6` |
 
@@ -491,7 +490,7 @@ function checkProperties() {
   keys.forEach(function (k) {
     console.log((p[k] ? 'OK   ' : 'MISS ') + k + (p[k] ? ' (' + p[k].length + '文字)' : ''));
   });
-  console.log('FORM: ' + (p.FIXED_FORM_URL ? 'FIXED_FORM_URL' : (p.FORM_TEMPLATE_ID ? 'FORM_TEMPLATE_ID' : '未設定')));
+  console.log('FORM_TEMPLATE_ID: ' + (p.FORM_TEMPLATE_ID ? '設定あり' : 'MISS'));
 }
 ```
 

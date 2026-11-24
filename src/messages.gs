@@ -30,7 +30,6 @@ const ERROR_MESSAGES = {
     formUrlMissing: "Googleフォームの回答URLを取得できませんでした",
     formCopyFailed: "Googleフォームの複製に失敗しました",
     formTemplateFileInvalid: "FORM_TEMPLATE_IDがGoogleフォームではありません",
-    fixedFormUnavailable: "FIXED_FORM_URLのフォームを開けません",
 
     stateJsonInvalid: "状態シートのJSONが不正です",
 };

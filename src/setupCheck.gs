@@ -25,51 +25,28 @@ function setupCheck() {
     }
 
     if (config) {
-        if (config.fixedFormUrl) {
-            try {
-                // 編集URLなら回答受付中かまで確認する。
-                // 公開URL（/viewform）や外部URLは、権限の都合で開けないことがあるため
-                // 形式検証のみとし、回答受付は手動確認とする。
-                if (isGoogleFormEditUrl(config.fixedFormUrl)) {
-                    const form = FormApp.openByUrl(config.fixedFormUrl);
+        try {
+            // FormAppで開けてもDriveの複製権限がない場合があるため、
+            // テンプレートファイル自体の種類とアクセスも確認する
+            const templateFile = DriveApp.getFileById(config.formTemplateId);
 
-                    if (!form.isAcceptingResponses()) {
-                        throw new Error(ERROR_MESSAGES.fixedFormUnavailable);
-                    }
-                } else {
-                    console.log(
-                        "FIXED_FORM_URL は編集URLではないため、回答受付は手動で確認してください"
-                    );
-                }
-
-                results.push(okResult("form_fixed_url"));
-            } catch (e) {
-                results.push(ngResult("form_fixed_url", e.message));
+            if (templateFile.getMimeType() !== MimeType.GOOGLE_FORMS) {
+                throw new Error(ERROR_MESSAGES.formTemplateFileInvalid);
             }
-        } else {
-            try {
-                // FormAppで開けてもDriveの複製権限がない場合があるため、
-                // テンプレートファイル自体の種類とアクセスも確認する
-                const templateFile = DriveApp.getFileById(config.formTemplateId);
 
-                if (templateFile.getMimeType() !== MimeType.GOOGLE_FORMS) {
-                    throw new Error(ERROR_MESSAGES.formTemplateFileInvalid);
-                }
+            const template = FormApp.openById(config.formTemplateId);
 
-                const template = FormApp.openById(config.formTemplateId);
-
-                if (!template.supportsAdvancedResponderPermissions()) {
-                    throw new Error(ERROR_MESSAGES.templateNotSupported);
-                }
-
-                if (template.collectsEmail()) {
-                    throw new Error(ERROR_MESSAGES.templateCollectsEmail);
-                }
-
-                results.push(okResult("form_template"));
-            } catch (e) {
-                results.push(ngResult("form_template", e.message));
+            if (!template.supportsAdvancedResponderPermissions()) {
+                throw new Error(ERROR_MESSAGES.templateNotSupported);
             }
+
+            if (template.collectsEmail()) {
+                throw new Error(ERROR_MESSAGES.templateCollectsEmail);
+            }
+
+            results.push(okResult("form_template"));
+        } catch (e) {
+            results.push(ngResult("form_template", e.message));
         }
 
         if (config.maintenanceRoomId === config.roomId) {
@@ -160,6 +137,4 @@ function ngResult(name, reason) {
     return { name: name, status: "NG", reason: reason };
 }
 
-function isGoogleFormEditUrl(url) {
-    return /^https:\/\/docs\.google\.com\/forms\/d\/[^/]+\/edit(?:[?#]|$)/i.test(url);
-}
+// フォームは Google フォームのテンプレート複製のみ

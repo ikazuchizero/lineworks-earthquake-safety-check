@@ -812,24 +812,6 @@ test("設定: プレースホルダーが残っていたらエラーにする", 
     assert.throws(() => gas.loadConfig(properties), /プレースホルダー/);
 });
 
-test("設定: 固定フォームURLモードではテンプレート不要", () => {
-    resetWorld();
-    delete world.properties.FORM_TEMPLATE_ID;
-    world.properties.FIXED_FORM_URL = "https://example.invalid/fixed-form";
-    world.earthquakeResponse = [testEvent(daytimeEventTime(), "東京湾", 45)];
-
-    gas.checkAndNotifyEarthquake();
-
-    assert.equal(world.copiedFormNames.length, 0);
-    assert.equal(world.sentMessages.length, 1);
-    assert.ok(
-        world.sentMessages[0].indexOf("https://example.invalid/fixed-form") !== -1
-    );
-
-    const { state } = currentState();
-    assert.equal(Object.keys(state.forms).length, 0);
-});
-
 test("設定: API URLとトークンURLを上書きできる", () => {
     resetWorld();
     world.properties.P2PQUAKE_API_URL =
@@ -1056,25 +1038,6 @@ test("保存済みフォームが削除されていたら作り直す", () => {
 
     const { state: after } = currentState();
     assert.equal(after.forms[eventTime].formId, "copy-1");
-});
-
-test("セットアップ確認: 固定URLのGoogleフォームは回答受付を確認する", () => {
-    resetWorld();
-    delete world.properties.FORM_TEMPLATE_ID;
-    const url = "https://docs.google.com/forms/d/test-form-id/edit";
-    world.properties.FIXED_FORM_URL = url;
-    world.triggers = [
-        { getHandlerFunction: () => "checkAndNotifyEarthquake" },
-        { getHandlerFunction: () => "writeHourlyHealthCheck" },
-    ];
-    world.properties.TRIGGER_CHECK_INTERVAL_MINUTES = String(gas.CHECK_INTERVAL_MINUTES);
-    world.properties.TRIGGER_HEALTH_INTERVAL_HOURS = "1";
-    world.forms["url:" + url] = { accepting: true, published: true };
-
-    assert.equal(gas.setupCheck(), true);
-
-    world.forms["url:" + url].accepting = false;
-    assert.equal(gas.setupCheck(), false);
 });
 
 test("状態: シートがキーを日時として保存しても重複排除できる", () => {

@@ -9,7 +9,7 @@
 | ルーム名 | |
 | `ROOM_ID` | |
 | スプレッドシートID | |
-| フォーム回答URL | |
+| フォームテンプレートID | |
 | GAS プロジェクトURL | |
 
 ## 1. LINE WORKS（15分）
@@ -24,7 +24,8 @@
 
 1. <https://script.google.com/home/usersettings> → 「Google Apps Script API」を **オン**
 2. <https://sheets.new> で新規作成 → URL の `/d/` と `/edit` の間を控える
-3. LINE WORKS フォーム（または Google フォーム）の**回答URL**（`https://`）を控える
+3. Google フォームのテンプレートを新規作成 → 編集URL の `/d/` と `/edit` の間を控える
+   - 設定 → 回答 → 「メールアドレスを収集する」を**オフ**
 
 ✅ 値が2つ控えられた
 
@@ -53,7 +54,7 @@ npx --yes @google/clasp push -f
 ## 4. 設定値（10分）
 
 1. エディタで **`setProperties.gs`** を開く
-2. `SETUP_VALUES` を自分の値に書き換える（`ROOM_ID` と `FORM_TEMPLATE_ID` は空のまま）
+2. `SETUP_VALUES` を自分の値に書き換える（`ROOM_ID` だけ空のまま）
 
 ```js
 const SETUP_VALUES = {
@@ -64,7 +65,7 @@ const SETUP_VALUES = {
     BOT_ID: "同",
     PRIVATE_KEY: "-----BEGIN PRIVATE KEY-----MIIE...-----END PRIVATE KEY-----",
     NOTIFY_SCALE: "40",
-    FIXED_FORM_URL: "控えた回答URL",
+    FORM_TEMPLATE_ID: "控えたテンプレートID",
 };
 ```
 

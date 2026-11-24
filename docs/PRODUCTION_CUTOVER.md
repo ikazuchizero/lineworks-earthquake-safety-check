@@ -37,7 +37,7 @@
 | `CLIENT_ID` / `CLIENT_SECRET` / `SERVICE_ACCT` / `PRIVATE_KEY` / `BOT_ID` | 本番テナントの Developer Console | 別テナントなら必須 |
 | `ROOM_ID` | 管理者に `diagnoseBot` を実行してもらう | 必須 |
 | `SPREADSHEET_ID` | 本番アカウントで新規作成 | 必須 |
-| `FORM_TEMPLATE_ID` | 本番用テンプレート | 必須（固定URL方式なら `FIXED_FORM_URL`） |
+| `FORM_TEMPLATE_ID` | 本番用テンプレート | 必須 |
 | `NOTIFY_SCALE` | 運用ルール（例: `40`） | 必須 |
 
 ### 1-2. ブラウザで開いておくタブ

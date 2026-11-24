@@ -1,6 +1,6 @@
 # lineworks-earthquake-safety-check
 
-P2PQuake の地震情報を確認し、設定した震度以上の場合に LINE WORKS へ安否確認通知を送る Google Apps Script（GAS）です。既定では通知対象の地震ごとに Google フォームのテンプレートを複製し、回答者 URL を通知本文に載せます。`FIXED_FORM_URL` を設定すると、複製せず固定 URL を使います。
+P2PQuake の地震情報を確認し、設定した震度以上の場合に LINE WORKS へ安否確認通知を送る Google Apps Script（GAS）です。通知対象の地震ごとに Google フォームのテンプレートを複製し、回答者 URL を通知本文に載せます。
 
 このブランチ（`codex/gas-forms`）は、PHP 版の機能を GAS へ移植した実装です。Google Cloud の OAuth クライアントや refresh token は不要で、GAS 標準の `FormApp` / `DriveApp` を使います。
 
@@ -27,14 +27,9 @@ PHP 版は `main` には含まれていません。最新の PHP 版は `origin/
 
 GAS の `setPublished(true)` で回答者 URL を公開します。組織のポリシーで匿名回答が制限されている場合は、実際の受信者で回答できることを確認してください。
 
-### フォームの2つのモード
+### フォームの方式
 
-| モード | 設定 | 動作 |
-|---|---|---|
-| 自動複製（既定） | `FORM_TEMPLATE_ID` | 地震ごとにテンプレートを複製し、公開して回答者 URL を使う |
-| 固定 URL | `FIXED_FORM_URL` | 複製・公開を行わず、設定した URL を毎回使う。`FORM_TEMPLATE_ID` は不要 |
-
-固定 URL モードは、1つのフォームを全地震で使い回す方式です。両方設定した場合は固定 URL を優先します。URL は `https://` のみ許可します。`docs.google.com/forms/d/.../edit` の編集URLなら `setupCheck` が回答受付中かまで確認しますが、公開URL（`/viewform`）や外部URL（LINE WORKS フォームなど）は手動確認となります。
+`FORM_TEMPLATE_ID` のテンプレートを地震ごとに複製し、公開して回答者 URL を使います。フォーム名は `安否確認 <震源地>` です。
 
 ## セットアップ
 
@@ -56,8 +51,7 @@ GAS エディタの「プロジェクトの設定」→「スクリプト プロ
 | `ROOM_ID` | 必須 | 安否確認通知を送るチャットルーム ID |
 | `MAINTENANCE_ROOM_ID` | 任意 | 障害通知先。未設定なら `ROOM_ID` |
 | `NOTIFY_SCALE` | 必須 | 通知する震度コード（既定値なし）。`0` はテスト用 |
-| `FORM_TEMPLATE_ID` | 条件付き必須 | 複製元の Google フォーム ID。`FIXED_FORM_URL` 未設定なら必須 |
-| `FIXED_FORM_URL` | 任意 | 固定フォーム URL モード。設定時はテンプレートを複製せず、この URL を毎回使う |
+| `FORM_TEMPLATE_ID` | 必須 | 複製元の Google フォーム ID |
 | `SPREADSHEET_ID` | 任意 | スプレッドシートにバインドしない場合に設定 |
 | `P2PQUAKE_API_URL` | 任意 | P2PQuake API の URL。既定 `https://api.p2pquake.net/v2/jma/quake` |
 | `LINEWORKS_TOKEN_URL` | 任意 | LINE WORKS のトークン URL。既定 `https://auth.worksmobile.com/oauth2/v2.0/token` |
@@ -77,7 +71,7 @@ GAS エディタの「プロジェクトの設定」→「スクリプト プロ
 
 GAS エディタで次の関数を順に実行します。
 
-1. `setupCheck` … 設定・シート・テンプレート（または固定 URL）・秘密鍵を確認（トリガー未登録のため `triggers` はNGで構いません）
+1. `setupCheck` … 設定・シート・テンプレート・秘密鍵を確認（トリガー未登録のため `triggers` はNGで構いません）
 2. `initializeNotificationBaseline` … **初回導入時のみ**。現在APIが返す地震を「通知済み」として記録（送信なし）
 3. `setupTriggers` … 10分ごとの地震確認と1時間ごとのヘルスチェックを登録
 4. `setupCheck` … もう一度実行し、すべて `OK` になることを確認
@@ -121,7 +115,7 @@ checkAndNotifyEarthquake
   → 震度しきい値・古さ・通知済み・UNKNOWN保留・静穏時間で選別
   → 静穏バッチの終了判定（送信前に「解放待ち」へ移す）
   → 発生時刻順に
-      フォーム解決（固定URL、またはテンプレート複製→公開→回答者URL）
+      フォーム解決（テンプレート複製→公開→回答者URL）
       → 回答者URLを状態シートへ保存
       → 送信直前に「送信中」を保存
       → LINE WORKS送信
@@ -235,16 +229,10 @@ node tests/run-tests.js
 
 ### フォーム方式
 
-GAS 版のフォーム方式は次の2つだけです。
-
-| 方式 | 設定 | 動作 |
-|---|---|---|
-| 自動複製（既定） | `FORM_TEMPLATE_ID` | 地震ごとにテンプレートを複製し、フォーム名に震源地を入れる |
-| 固定 URL | `FIXED_FORM_URL` | 1つのフォームを使い回す（LINE WORKS フォームも可） |
+GAS 版はテンプレートを地震ごとに複製します。フォーム名は `安否確認 <震源地>` です。
 
 | PHP 版の機能 | GAS 版 | 扱い |
 |---|---|---|
-| 固定フォーム URL モード | `FIXED_FORM_URL` | 移植 |
 | 保守通知先への疎通確認 | `connectivityCheck` が通常・保守の両方へ送信 | 移植 |
 | ヘルスチェックのログ集計 | 1時間単位の実行回数・成功率集計 | 設計変更 |
 | PHP ログファイルへの構造化ログ | スプレッドシートの `地震ログ` | 設計変更 |
@@ -255,7 +243,6 @@ GAS 版のフォーム方式は次の2つだけです。
 |---|---|
 | `notify_scale` 未設定はエラー | `NOTIFY_SCALE` 未設定はエラー（既定値なし） |
 | プレースホルダー文字列を拒否 | `REPLACE_WITH_` で始まる値を拒否 |
-| 固定フォーム URL モード | `FIXED_FORM_URL` で対応 |
 | P2PQuake URL を設定可能 | `P2PQUAKE_API_URL` で対応（httpsのみ） |
 | LINE WORKS トークン URL を設定可能 | `LINEWORKS_TOKEN_URL` で対応（httpsのみ） |
 | フォームの設定検証 | テンプレートの公開対応・メール収集設定・テンプレートファイルへのアクセスを検証 |
@@ -308,8 +295,8 @@ PHP 版 `codex/setup-check` のテストは 39 件（`ConfigTest` 4、`Connectiv
 
 ## 旧版からの移行
 
-- 旧 GAS 版の `FORM_URL` と `LAST_NOTIFIED_ID` は使いません（固定 URL を使う場合は `FIXED_FORM_URL` を設定してください）。
-- 自動複製モードでは `FORM_TEMPLATE_ID` を新たに設定してください。
+- 旧 GAS 版の `FORM_URL` と `LAST_NOTIFIED_ID` は使いません。
+- `FORM_TEMPLATE_ID` に複製元の Google フォームを設定してください。
 - `NOTIFY_SCALE` は必須です。旧版の既定値（45）に依存していた場合は明示的に設定してください。
 - 既存の `地震ログ` の見出し行は、初回実行時に 7 列の見出しへ更新されます（データ行はそのまま残ります）。
 - **移行直後に過去の地震を通知したくない場合は、`initializeNotificationBaseline` を一度実行してください。** `resetState` は状態を消すため、過去地震の通知を防ぐ目的では使いません（初期化すると次の実行で通知対象になります）。
@@ -319,7 +306,7 @@ PHP 版 `codex/setup-check` のテストは 39 件（`ConfigTest` 4、`Connectiv
 ## 注意事項
 
 - 実フォーム URL、room_id、bot_id、token、secret、秘密鍵はログや README に書かないでください。
-- 自動複製モードでは、地震ごとにフォームのコピーが Drive に増えます。定期的に不要なコピーを整理してください。固定 URL モードではコピーを作りません。
+- 地震ごとにフォームのコピーが Drive に増えます。定期的に不要なコピーを整理してください。
 - フォーム複製直後に中断した場合は、次回同じ名前のコピーを再利用します。Drive の検索反映が遅れた場合に限り、未使用のコピーが残ることがあります（通知の重複は発生しません）。
 - 保存済みフォームが開けない場合は一度再試行し、それでも失敗したときだけ削除・複製し直します。一時的なAPIエラーで不要なコピーを増やさないためです。
 - 送信後に状態保存が失敗した場合は、次回に同じ地震を再送する可能性があります（at-least-once）。ログの `attempt=` で再送かどうかを確認できます。
@@ -329,4 +316,4 @@ PHP 版 `codex/setup-check` のテストは 39 件（`ConfigTest` 4、`Connectiv
 - `NOTIFY_SCALE=0` はテスト専用です。本番は震度5弱相当の `45` 以上を推奨します。
 - 障害通知は既定で通常の通知先と同じルームへ送られます。本番では `MAINTENANCE_ROOM_ID` に別ルームを設定してください。未設定の場合、`setupCheck` が警告します。設定した場合、`connectivityCheck` は通常・保守の両方へ確認メッセージを送ります。
 - `initializeNotificationBaseline` は初回導入時だけ実行してください。通常運用で実行すると、その時点の最新地震が通知対象から外れます。
-- `FIXED_FORM_URL` は `https://` のみ許可します。公開URL（`/viewform`）は回答受付を自動確認できないため、実受信者での回答確認を行ってください。
+- 公開URL（`/viewform`）で配布する場合、回答受付を自動では確認できないため、実受信者での回答確認を行ってください。
